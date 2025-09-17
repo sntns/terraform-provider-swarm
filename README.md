@@ -105,6 +105,15 @@ Joins a node to an existing Docker Swarm cluster.
 - The Docker daemon must be accessible (default: unix:///var/run/docker.sock)
 - Network connectivity between swarm nodes
 
+## Implementation Details
+
+This provider uses a hybrid approach combining Docker API with Docker CLI:
+
+- **Docker API**: Used for core swarm operations (init, join, leave, inspect) for reliable programmatic access
+- **Docker CLI**: Used for join token retrieval where the API doesn't provide direct access
+- **Multi-host Support**: Provider can be configured with different hosts, certificates, and connection settings
+- **Error Handling**: Comprehensive error handling for network issues, authentication, and swarm state conflicts
+
 ## Building
 
 ```bash

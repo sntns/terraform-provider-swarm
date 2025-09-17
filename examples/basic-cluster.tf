@@ -6,9 +6,19 @@ terraform {
   }
 }
 
-# Configure the Swarm Provider
+# Configure the Swarm Provider for different hosts
+# You can configure different providers for different Docker hosts
 provider "swarm" {
-  host = "unix:///var/run/docker.sock"
+  host = "unix:///var/run/docker.sock"  # Local host
+}
+
+# Example of provider for remote host with TCP connection
+provider "swarm" {
+  alias    = "remote"
+  host     = "tcp://192.168.1.100:2376"
+  cert_path = "/path/to/cert.pem"
+  key_path  = "/path/to/key.pem"
+  ca_path   = "/path/to/ca.pem"
 }
 
 # Initialize the swarm cluster on the bootstrap node

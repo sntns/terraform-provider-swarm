@@ -2,52 +2,56 @@ package resources
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
-	"os/exec"
+	"net/http"
 	"strings"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/client"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/types"
+	tfTypes "github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
-	_ resource.Resource              = &swarmJoinSimpleResource{}
-	_ resource.ResourceWithConfigure = &swarmJoinSimpleResource{}
+	_ resource.Resource              = &swarmJoinResource{}
+	_ resource.ResourceWithConfigure = &swarmJoinResource{}
 )
 
 // NewSwarmJoinResource is a helper function to simplify the provider implementation.
 func NewSwarmJoinResource() resource.Resource {
-	return &swarmJoinSimpleResource{}
+	return &swarmJoinResource{}
 }
 
-// swarmJoinSimpleResource is the resource implementation.
-type swarmJoinSimpleResource struct {
-	dockerHost string
+// swarmJoinResource is the resource implementation.
+type swarmJoinResource struct {
+	client *client.Client
 }
 
-// swarmJoinSimpleResourceModel maps the resource schema data.
-type swarmJoinSimpleResourceModel struct {
-	ID            types.String `tfsdk:"id"`
-	JoinToken     types.String `tfsdk:"join_token"`
-	RemoteAddrs   types.Set    `tfsdk:"remote_addrs"`
-	AdvertiseAddr types.String `tfsdk:"advertise_addr"`
-	ListenAddr    types.String `tfsdk:"listen_addr"`
-	NodeID        types.String `tfsdk:"node_id"`
-	NodeRole      types.String `tfsdk:"node_role"`
+// swarmJoinResourceModel maps the resource schema data.
+type swarmJoinResourceModel struct {
+	ID            tfTypes.String `tfsdk:"id"`
+	JoinToken     tfTypes.String `tfsdk:"join_token"`
+	RemoteAddrs   tfTypes.Set    `tfsdk:"remote_addrs"`
+	AdvertiseAddr tfTypes.String `tfsdk:"advertise_addr"`
+	ListenAddr    tfTypes.String `tfsdk:"listen_addr"`
+	NodeID        tfTypes.String `tfsdk:"node_id"`
+	NodeRole      tfTypes.String `tfsdk:"node_role"`
 }
 
 // Metadata returns the resource type name.
-func (r *swarmJoinSimpleResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *swarmJoinResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_join"
 }
 
 // Schema defines the schema for the resource.
-func (r *swarmJoinSimpleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *swarmJoinResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "Join a node to an existing Docker Swarm cluster.",
 		Attributes: map[string]schema.Attribute{
@@ -66,7 +70,7 @@ func (r *swarmJoinSimpleResource) Schema(_ context.Context, _ resource.SchemaReq
 			"remote_addrs": schema.SetAttribute{
 				Description: "Addresses of existing swarm managers",
 				Required:    true,
-				ElementType: types.StringType,
+				ElementType: tfTypes.StringType,
 			},
 			"advertise_addr": schema.StringAttribute{
 				Description: "Externally reachable address advertised to other nodes",
@@ -89,7 +93,7 @@ func (r *swarmJoinSimpleResource) Schema(_ context.Context, _ resource.SchemaReq
 }
 
 // Configure adds the provider configured client to the resource.
-func (r *swarmJoinSimpleResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *swarmJoinResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -103,12 +107,38 @@ func (r *swarmJoinSimpleResource) Configure(_ context.Context, req resource.Conf
 		return
 	}
 
-	r.dockerHost = clientConfig.Host
+	// Create Docker client
+	var httpClient *http.Client
+	if clientConfig.CertPath != "" && clientConfig.KeyPath != "" && clientConfig.CaPath != "" {
+		tlsConfig := &tls.Config{}
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		}
+	}
+
+	dockerClient, err := client.NewClientWithOpts(
+		client.WithHost(clientConfig.Host),
+		client.WithAPIVersionNegotiation(),
+		client.WithHTTPClient(httpClient),
+	)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Create Docker Client",
+			"An unexpected error occurred when creating the Docker client. "+
+				"If the error is not clear, please contact the provider developers.\n\n"+
+				"Docker Client Error: "+err.Error(),
+		)
+		return
+	}
+
+	r.client = dockerClient
 }
 
 // Create creates the resource and sets the initial Terraform state.
-func (r *swarmJoinSimpleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan swarmJoinSimpleResourceModel
+func (r *swarmJoinResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan swarmJoinResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
@@ -123,40 +153,34 @@ func (r *swarmJoinSimpleResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	// Build docker swarm join command
-	args := []string{"swarm", "join", "--token", plan.JoinToken.ValueString()}
+	// Prepare join request
+	joinRequest := swarm.JoinRequest{
+		JoinToken:   plan.JoinToken.ValueString(),
+		RemoteAddrs: remoteAddrs,
+	}
 
 	if !plan.AdvertiseAddr.IsNull() {
-		args = append(args, "--advertise-addr", plan.AdvertiseAddr.ValueString())
+		joinRequest.AdvertiseAddr = plan.AdvertiseAddr.ValueString()
 	}
 
 	if !plan.ListenAddr.IsNull() {
-		args = append(args, "--listen-addr", plan.ListenAddr.ValueString())
+		joinRequest.ListenAddr = plan.ListenAddr.ValueString()
 	}
 
-	// Add remote addresses
-	for _, addr := range remoteAddrs {
-		args = append(args, addr)
-	}
-
-	// Execute docker swarm join
-	cmd := exec.Command("docker", args...)
-	output, err := cmd.CombinedOutput()
+	// Join the swarm using Docker API
+	err := r.client.SwarmJoin(ctx, joinRequest)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error joining swarm",
-			"Could not join swarm, unexpected error: "+err.Error()+"\nOutput: "+string(output),
+			"Could not join swarm, unexpected error: "+err.Error(),
 		)
 		return
 	}
 
-	tflog.Trace(ctx, "joined swarm", map[string]interface{}{
-		"output": string(output),
-	})
+	tflog.Trace(ctx, "joined swarm")
 
-	// Get node info
-	nodeInfoCmd := exec.Command("docker", "info", "--format", "{{.Swarm.NodeID}}")
-	nodeInfoOutput, err := nodeInfoCmd.Output()
+	// Get node info to populate computed fields
+	nodeInfo, err := r.client.Info(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error getting node info",
@@ -165,25 +189,13 @@ func (r *swarmJoinSimpleResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	nodeID := strings.TrimSpace(string(nodeInfoOutput))
+	nodeID := nodeInfo.Swarm.NodeID
+	clusterID := nodeInfo.Swarm.Cluster.ID
 
-	// Get cluster ID
-	clusterInfoCmd := exec.Command("docker", "info", "--format", "{{.Swarm.Cluster.ID}}")
-	clusterInfoOutput, err := clusterInfoCmd.Output()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting cluster info",
-			"Could not get cluster info after joining swarm, unexpected error: "+err.Error(),
-		)
-		return
-	}
-
-	clusterID := strings.TrimSpace(string(clusterInfoOutput))
-
-	// Determine role based on token (simplified approach)
+	// Determine node role from join token or node info
 	nodeRole := "worker"
 	if strings.Contains(plan.JoinToken.ValueString(), "SWMTKN-1-") {
-		// Check if it's a manager token by its characteristics
+		// This is a simplified check - manager tokens typically have different patterns
 		parts := strings.Split(plan.JoinToken.ValueString(), "-")
 		if len(parts) >= 4 && len(parts[3]) > 30 {
 			nodeRole = "manager"
@@ -191,9 +203,9 @@ func (r *swarmJoinSimpleResource) Create(ctx context.Context, req resource.Creat
 	}
 
 	// Map response body to schema and populate Computed attribute values
-	plan.ID = types.StringValue(fmt.Sprintf("%s-%s", nodeID, clusterID))
-	plan.NodeID = types.StringValue(nodeID)
-	plan.NodeRole = types.StringValue(nodeRole)
+	plan.ID = tfTypes.StringValue(fmt.Sprintf("%s-%s", nodeID, clusterID))
+	plan.NodeID = tfTypes.StringValue(nodeID)
+	plan.NodeRole = tfTypes.StringValue(nodeRole)
 
 	// Set state to fully populated data
 	diags = resp.State.Set(ctx, plan)
@@ -204,8 +216,8 @@ func (r *swarmJoinSimpleResource) Create(ctx context.Context, req resource.Creat
 }
 
 // Read refreshes the Terraform state with the latest data.
-func (r *swarmJoinSimpleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state swarmJoinSimpleResourceModel
+func (r *swarmJoinResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state swarmJoinResourceModel
 	diags := req.State.Get(ctx, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
@@ -213,8 +225,7 @@ func (r *swarmJoinSimpleResource) Read(ctx context.Context, req resource.ReadReq
 	}
 
 	// Check if node is still part of swarm
-	nodeInfoCmd := exec.Command("docker", "info", "--format", "{{.Swarm.NodeID}}")
-	nodeInfoOutput, err := nodeInfoCmd.Output()
+	nodeInfo, err := r.client.Info(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Reading Node Info",
@@ -223,7 +234,7 @@ func (r *swarmJoinSimpleResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	nodeID := strings.TrimSpace(string(nodeInfoOutput))
+	nodeID := nodeInfo.Swarm.NodeID
 	if nodeID == "" {
 		// Node is no longer part of swarm, remove from state
 		resp.State.RemoveResource(ctx)
@@ -231,7 +242,22 @@ func (r *swarmJoinSimpleResource) Read(ctx context.Context, req resource.ReadReq
 	}
 
 	// Update state with current node info
-	state.NodeID = types.StringValue(nodeID)
+	state.NodeID = tfTypes.StringValue(nodeID)
+
+	// Try to get more detailed node info to determine role
+	nodeList, err := r.client.NodeList(ctx, types.NodeListOptions{})
+	if err == nil {
+		for _, node := range nodeList {
+			if node.ID == nodeID {
+				if node.Spec.Role == swarm.NodeRoleManager {
+					state.NodeRole = tfTypes.StringValue("manager")
+				} else {
+					state.NodeRole = tfTypes.StringValue("worker")
+				}
+				break
+			}
+		}
+	}
 
 	// Set refreshed state
 	diags = resp.State.Set(ctx, &state)
@@ -242,7 +268,7 @@ func (r *swarmJoinSimpleResource) Read(ctx context.Context, req resource.ReadReq
 }
 
 // Update updates the resource and sets the updated Terraform state on success.
-func (r *swarmJoinSimpleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *swarmJoinResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// Most swarm join settings cannot be updated after joining
 	resp.Diagnostics.AddError(
 		"Swarm Join Update Not Supported",
@@ -251,24 +277,27 @@ func (r *swarmJoinSimpleResource) Update(ctx context.Context, req resource.Updat
 }
 
 // Delete deletes the resource and removes the Terraform state on success.
-func (r *swarmJoinSimpleResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Leave the swarm
-	cmd := exec.Command("docker", "swarm", "leave")
-	output, err := cmd.CombinedOutput()
+func (r *swarmJoinResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state swarmJoinResourceModel
+	diags := req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Leave the swarm using Docker API
+	err := r.client.SwarmLeave(ctx, false) // try regular leave first
 	if err != nil {
 		// Try force leave if regular leave fails
-		forceCmd := exec.Command("docker", "swarm", "leave", "--force")
-		forceOutput, forceErr := forceCmd.CombinedOutput()
-		if forceErr != nil {
+		err = r.client.SwarmLeave(ctx, true)
+		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Leaving Swarm",
-				"Could not leave swarm, unexpected error: "+forceErr.Error()+"\nOutput: "+string(forceOutput),
+				"Could not leave swarm, unexpected error: "+err.Error(),
 			)
 			return
 		}
 	}
 
-	tflog.Trace(ctx, "left swarm", map[string]interface{}{
-		"output": string(output),
-	})
+	tflog.Trace(ctx, "left swarm")
 }
