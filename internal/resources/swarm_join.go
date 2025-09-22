@@ -2,9 +2,7 @@ package resources
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -98,31 +96,35 @@ func (r *swarmJoinResource) Configure(_ context.Context, req resource.ConfigureR
 		return
 	}
 
-	clientConfig, ok := req.ProviderData.(*DockerClientConfig)
+	// Support both old single config and new multi-node config for backward compatibility
+	if clientConfig, ok := req.ProviderData.(*DockerClientConfig); ok {
+		// Legacy single config support
+		dockerClient, err := createDockerClient(clientConfig)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to Create Docker Client",
+				"An unexpected error occurred when creating the Docker client. "+
+					"If the error is not clear, please contact the provider developers.\n\n"+
+					"Docker Client Error: "+err.Error(),
+			)
+			return
+		}
+		r.client = dockerClient
+		return
+	}
+
+	// New multi-node provider data
+	providerData, ok := req.ProviderData.(*SwarmProviderData)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *DockerClientConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *SwarmProviderData or *DockerClientConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	// Create Docker client
-	var httpClient *http.Client
-	if clientConfig.CertPath != "" && clientConfig.KeyPath != "" && clientConfig.CaPath != "" {
-		tlsConfig := &tls.Config{}
-		httpClient = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
-		}
-	}
-
-	dockerClient, err := client.NewClientWithOpts(
-		client.WithHost(clientConfig.Host),
-		client.WithAPIVersionNegotiation(),
-		client.WithHTTPClient(httpClient),
-	)
+	// Use default config for swarm join (can be enhanced later to support node selection)
+	dockerClient, err := createDockerClient(providerData.DefaultConfig)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create Docker Client",

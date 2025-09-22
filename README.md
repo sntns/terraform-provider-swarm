@@ -24,6 +24,25 @@ terraform {
 
 provider "swarm" {
   host = "unix:///var/run/docker.sock"  # Optional, defaults to unix:///var/run/docker.sock
+  
+  # Optional: Multi-node configuration for managing different Docker hosts
+  nodes = {
+    "bootstrap" = {
+      host = "unix:///var/run/docker.sock"
+    }
+    "worker1" = {
+      host      = "tcp://192.168.1.101:2376"
+      cert_path = "/path/to/worker1/cert.pem"
+      key_path  = "/path/to/worker1/key.pem"
+      ca_path   = "/path/to/worker1/ca.pem"
+    }
+    "manager1" = {
+      host      = "tcp://192.168.1.102:2376"
+      cert_path = "/path/to/manager1/cert.pem"
+      key_path  = "/path/to/manager1/key.pem"
+      ca_path   = "/path/to/manager1/ca.pem"
+    }
+  }
 }
 ```
 
@@ -109,9 +128,10 @@ Joins a node to an existing Docker Swarm cluster.
 
 This provider uses a hybrid approach combining Docker API with Docker CLI:
 
-- **Docker API**: Used for core swarm operations (init, join, leave, inspect) for reliable programmatic access
-- **Docker CLI**: Used for join token retrieval where the API doesn't provide direct access
+- **Docker API**: Used for all core swarm operations (init, join, leave, inspect) for reliable programmatic access
+- **Join Token Retrieval**: Join tokens are retrieved directly from SwarmInspect API response (JoinTokens field)
 - **Multi-host Support**: Provider can be configured with different hosts, certificates, and connection settings
+- **Node Configuration**: Support for mapping multiple node configurations within a single provider block
 - **Error Handling**: Comprehensive error handling for network issues, authentication, and swarm state conflicts
 
 ## Building

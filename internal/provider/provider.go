@@ -31,6 +31,7 @@ type swarmProviderModel struct {
 	KeyPath    types.String `tfsdk:"key_path"`
 	CaPath     types.String `tfsdk:"ca_path"`
 	APIVersion types.String `tfsdk:"api_version"`
+	Nodes      types.Map    `tfsdk:"nodes"`
 }
 
 // Metadata returns the provider type name.
@@ -63,6 +64,34 @@ func (p *swarmProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 				Description: "Docker API version",
 				Optional:    true,
 			},
+			"nodes": schema.MapNestedAttribute{
+				Description: "Map of node configurations for multi-host cluster management",
+				Optional:    true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"host": schema.StringAttribute{
+							Description: "Docker daemon host for this node",
+							Required:    true,
+						},
+						"cert_path": schema.StringAttribute{
+							Description: "Path to client certificate for TLS authentication",
+							Optional:    true,
+						},
+						"key_path": schema.StringAttribute{
+							Description: "Path to client key for TLS authentication", 
+							Optional:    true,
+						},
+						"ca_path": schema.StringAttribute{
+							Description: "Path to CA certificate for TLS authentication",
+							Optional:    true,
+						},
+						"api_version": schema.StringAttribute{
+							Description: "Docker API version",
+							Optional:    true,
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -91,8 +120,8 @@ func (p *swarmProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	caPath := config.CaPath.ValueString()
 	apiVersion := config.APIVersion.ValueString()
 
-	// Create Docker client configuration
-	clientConfig := &DockerClientConfig{
+	// Create default Docker client configuration
+	defaultClientConfig := &DockerClientConfig{
 		Host:       host,
 		CertPath:   certPath,
 		KeyPath:    keyPath,
@@ -100,10 +129,44 @@ func (p *swarmProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		APIVersion: apiVersion,
 	}
 
+	// Create multi-node configuration
+	nodeConfigs := make(map[string]*DockerClientConfig)
+	
+	// Parse nodes configuration if provided
+	if !config.Nodes.IsNull() {
+		var nodesMap map[string]NodeConfig
+		diags = config.Nodes.ElementsAs(ctx, &nodesMap, false)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		for nodeName, nodeConfig := range nodesMap {
+			nodeHost := nodeConfig.Host.ValueString()
+			if nodeHost == "" {
+				nodeHost = "unix:///var/run/docker.sock"
+			}
+
+			nodeConfigs[nodeName] = &DockerClientConfig{
+				Host:       nodeHost,
+				CertPath:   nodeConfig.CertPath.ValueString(),
+				KeyPath:    nodeConfig.KeyPath.ValueString(),
+				CaPath:     nodeConfig.CaPath.ValueString(),
+				APIVersion: nodeConfig.APIVersion.ValueString(),
+			}
+		}
+	}
+
+	// Create comprehensive provider data
+	providerData := &SwarmProviderData{
+		DefaultConfig: defaultClientConfig,
+		NodeConfigs:   nodeConfigs,
+	}
+
 	// Make the Docker client available during DataSource and Resource
 	// type Configure methods.
-	resp.DataSourceData = clientConfig
-	resp.ResourceData = clientConfig
+	resp.DataSourceData = providerData
+	resp.ResourceData = providerData
 }
 
 // DataSources defines the data sources implemented in the provider.
@@ -126,4 +189,19 @@ type DockerClientConfig struct {
 	KeyPath    string
 	CaPath     string
 	APIVersion string
+}
+
+// NodeConfig represents configuration for a specific node
+type NodeConfig struct {
+	Host       types.String `tfsdk:"host"`
+	CertPath   types.String `tfsdk:"cert_path"`
+	KeyPath    types.String `tfsdk:"key_path"`
+	CaPath     types.String `tfsdk:"ca_path"`
+	APIVersion types.String `tfsdk:"api_version"`
+}
+
+// SwarmProviderData holds comprehensive provider configuration
+type SwarmProviderData struct {
+	DefaultConfig *DockerClientConfig
+	NodeConfigs   map[string]*DockerClientConfig
 }

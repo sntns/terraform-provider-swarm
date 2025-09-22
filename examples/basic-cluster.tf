@@ -10,6 +10,25 @@ terraform {
 # You can configure different providers for different Docker hosts
 provider "swarm" {
   host = "unix:///var/run/docker.sock"  # Local host
+  
+  # Optional: Configure specific nodes for multi-host management
+  nodes = {
+    "bootstrap" = {
+      host = "unix:///var/run/docker.sock"
+    }
+    "worker1" = {
+      host      = "tcp://192.168.1.101:2376"
+      cert_path = "/path/to/worker1/cert.pem"
+      key_path  = "/path/to/worker1/key.pem"
+      ca_path   = "/path/to/worker1/ca.pem"
+    }
+    "manager1" = {
+      host      = "tcp://192.168.1.102:2376"
+      cert_path = "/path/to/manager1/cert.pem"
+      key_path  = "/path/to/manager1/key.pem" 
+      ca_path   = "/path/to/manager1/ca.pem"
+    }
+  }
 }
 
 # Example of provider for remote host with TCP connection

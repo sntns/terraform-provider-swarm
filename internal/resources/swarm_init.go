@@ -2,11 +2,7 @@ package resources
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
-	"os/exec"
-	"strings"
 
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
@@ -88,31 +84,35 @@ func (r *swarmInitResource) Configure(_ context.Context, req resource.ConfigureR
 		return
 	}
 
-	clientConfig, ok := req.ProviderData.(*DockerClientConfig)
+	// Support both old single config and new multi-node config for backward compatibility
+	if clientConfig, ok := req.ProviderData.(*DockerClientConfig); ok {
+		// Legacy single config support
+		dockerClient, err := createDockerClient(clientConfig)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to Create Docker Client",
+				"An unexpected error occurred when creating the Docker client. "+
+					"If the error is not clear, please contact the provider developers.\n\n"+
+					"Docker Client Error: "+err.Error(),
+			)
+			return
+		}
+		r.client = dockerClient
+		return
+	}
+
+	// New multi-node provider data
+	providerData, ok := req.ProviderData.(*SwarmProviderData)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *DockerClientConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *SwarmProviderData or *DockerClientConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	// Create Docker client
-	var httpClient *http.Client
-	if clientConfig.CertPath != "" && clientConfig.KeyPath != "" && clientConfig.CaPath != "" {
-		tlsConfig := &tls.Config{}
-		httpClient = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
-		}
-	}
-
-	dockerClient, err := client.NewClientWithOpts(
-		client.WithHost(clientConfig.Host),
-		client.WithAPIVersionNegotiation(),
-		client.WithHTTPClient(httpClient),
-	)
+	// Use default config for swarm init (can be enhanced later to support node selection)
+	dockerClient, err := createDockerClient(providerData.DefaultConfig)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create Docker Client",
@@ -170,32 +170,21 @@ func (r *swarmInitResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	// Get join tokens using Docker CLI (hybrid approach)
-	// Docker API doesn't expose join tokens directly, so we use CLI for this specific operation
-	managerTokenCmd := exec.Command("docker", "swarm", "join-token", "manager", "-q")
-	managerTokenOutput, err := managerTokenCmd.Output()
+	// Get join tokens using Docker API - SwarmInspect includes JoinTokens
+	// Refresh swarm info to get the latest tokens
+	swarmInfoWithTokens, err := r.client.SwarmInspect(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
-			"Error getting manager join token",
-			"Could not get manager join token, unexpected error: "+err.Error(),
-		)
-		return
-	}
-
-	workerTokenCmd := exec.Command("docker", "swarm", "join-token", "worker", "-q")
-	workerTokenOutput, err := workerTokenCmd.Output()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting worker join token",  
-			"Could not get worker join token, unexpected error: "+err.Error(),
+			"Error getting join tokens from swarm inspect",
+			"Could not get join tokens from swarm inspect, unexpected error: "+err.Error(),
 		)
 		return
 	}
 
 	// Map response body to schema and populate Computed attribute values
 	plan.ID = tfTypes.StringValue(swarmInfo.ID)
-	plan.ManagerToken = tfTypes.StringValue(strings.TrimSpace(string(managerTokenOutput)))
-	plan.WorkerToken = tfTypes.StringValue(strings.TrimSpace(string(workerTokenOutput)))
+	plan.ManagerToken = tfTypes.StringValue(swarmInfoWithTokens.JoinTokens.Manager)
+	plan.WorkerToken = tfTypes.StringValue(swarmInfoWithTokens.JoinTokens.Worker)
 
 	// Set state to fully populated data
 	diags = resp.State.Set(ctx, plan)
@@ -234,29 +223,9 @@ func (r *swarmInitResource) Read(ctx context.Context, req resource.ReadRequest, 
 	// Update state with current swarm info
 	state.ID = tfTypes.StringValue(swarmInfo.ID)
 
-	// Get current join tokens using Docker CLI
-	managerTokenCmd := exec.Command("docker", "swarm", "join-token", "manager", "-q")
-	managerTokenOutput, err := managerTokenCmd.Output()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting manager join token",
-			"Could not get manager join token: "+err.Error(),
-		)
-		return
-	}
-
-	workerTokenCmd := exec.Command("docker", "swarm", "join-token", "worker", "-q")
-	workerTokenOutput, err := workerTokenCmd.Output()
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error getting worker join token",
-			"Could not get worker join token: "+err.Error(),
-		)
-		return
-	}
-
-	state.ManagerToken = tfTypes.StringValue(strings.TrimSpace(string(managerTokenOutput)))
-	state.WorkerToken = tfTypes.StringValue(strings.TrimSpace(string(workerTokenOutput)))
+	// Get join tokens from swarm info (they are included in SwarmInspect response)
+	state.ManagerToken = tfTypes.StringValue(swarmInfo.JoinTokens.Manager)
+	state.WorkerToken = tfTypes.StringValue(swarmInfo.JoinTokens.Worker)
 
 	// Set refreshed state
 	diags = resp.State.Set(ctx, &state)
@@ -293,13 +262,4 @@ func (r *swarmInitResource) Delete(ctx context.Context, req resource.DeleteReque
 		)
 		return
 	}
-}
-
-// DockerClientConfig represents the Docker client configuration
-type DockerClientConfig struct {
-	Host       string
-	CertPath   string
-	KeyPath    string
-	CaPath     string
-	APIVersion string
 }
