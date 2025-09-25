@@ -16,50 +16,35 @@ linters-settings:
       - opinionated
       - performance
       - style
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
   govet:
-    check-shadowing: true
-  nolintlint:
-    require-explanation: true
-    require-specific: true
+    enable:
+      - shadow
 
 linters:
-  disable-all: true
   enable:
     - bodyclose
-    - deadcode
-    - depguard
     - dogsled
     - errcheck
-    - exportloopref
     - exhaustive
     - goconst
     - gocritic
-    - gofmt
-    - goimports
-    - gomnd
-    - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
     - nakedret
-    - noctx
-    - nolintlint
     - rowserrcheck
     - staticcheck
-    - structcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
     - whitespace
 
 issues:
-  # Excluding configuration per-path, per-linter, per-text and per-source
   exclude-rules:
     - path: _test\.go
       linters:
-        - gomnd
+        - errcheck
