@@ -4,6 +4,8 @@
 *.dll
 *.so
 *.dylib
+terraform-provider-swarm
+
 
 # Test binary, built with `go test -c`
 *.test
@@ -25,10 +27,11 @@ dist/
 *.tfstate
 *.tfstate.*
 *.tfvars
+*.tfvars.json
 .terraform/
 .terraform.lock.hcl
 
-# IDE
+# IDE files
 .vscode/
 .idea/
 *.swp
