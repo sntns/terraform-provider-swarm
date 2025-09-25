@@ -1,6 +1,8 @@
 module github.com/sntns/terraform-provider-swarm
 
-go 1.21
+go 1.24.0
+
+toolchain go1.24.7
 
 require (
 	github.com/docker/docker v24.0.7+incompatible
