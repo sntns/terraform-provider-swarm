@@ -26,7 +26,9 @@ type SwarmProviderData struct {
 func createDockerClient(clientConfig *DockerClientConfig) (*client.Client, error) {
 	var httpClient *http.Client
 	if clientConfig.CertPath != "" && clientConfig.KeyPath != "" && clientConfig.CaPath != "" {
-		tlsConfig := &tls.Config{}
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
 		httpClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig,
