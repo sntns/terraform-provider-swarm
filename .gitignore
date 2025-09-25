@@ -6,6 +6,7 @@
 *.dylib
 terraform-provider-swarm
 
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -17,6 +18,10 @@ terraform-provider-swarm
 
 # Go workspace file
 go.work
+
+# Build artifacts
+terraform-provider-swarm
+dist/
 
 # Terraform files
 *.tfstate
@@ -32,17 +37,16 @@ go.work
 *.swp
 *.swo
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Testing
+.test/
+examples/.terraform/
+examples/*.tfstate
+examples/*.tfvars
+examples/.terraform.lock.hcl
 
-# Temporary files
-*.tmp
-*.temp
-
-# Build artifacts
-dist/
-build/
+# Documentation generation
+docs/
