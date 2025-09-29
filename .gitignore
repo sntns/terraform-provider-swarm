@@ -49,5 +49,5 @@ examples/*.tfstate
 examples/*.tfvars
 examples/.terraform.lock.hcl
 
-# Documentation generation
-docs/
+# Auto-generated documentation (keep manually written docs)
+# docs/
