@@ -297,6 +297,22 @@ func (r *swarmJoinResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
+	// Recreate Docker client from state.Node if needed
+	if r.client == nil {
+		if state.Node != nil {
+			dockerConfig := docker.ExtractConfig(*state.Node)
+			dockerClient, err := dockerConfig.NewClient()
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Unable to Create Docker Client in Delete",
+					"An unexpected error occurred when creating the Docker client in Delete. \n\nDocker Client Error: "+err.Error(),
+				)
+				return
+			}
+			r.client = dockerClient
+		}
+	}
+
 	// Leave the swarm using Docker API
 	err := r.client.SwarmLeave(ctx, false) // try regular leave first
 	if err != nil {
