@@ -3,8 +3,10 @@ HOSTNAME=registry.terraform.io
 NAMESPACE=sntns
 NAME=swarm
 BINARY=terraform-provider-${NAME}
-VERSION=0.1.0
-OS_ARCH=linux_amd64
+VERSION=0.1.2
+GOOS=$(shell go env GOOS)
+GOARCH=$(shell go env GOARCH)
+OS_ARCH=${GOOS}_${GOARCH}
 
 default: install
 

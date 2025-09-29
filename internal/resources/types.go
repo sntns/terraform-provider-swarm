@@ -18,8 +18,7 @@ type DockerClientConfig struct {
 
 // SwarmProviderData holds comprehensive provider configuration
 type SwarmProviderData struct {
-	DefaultConfig *DockerClientConfig
-	NodeConfigs   map[string]*DockerClientConfig
+	NodeConfigs map[string]*DockerClientConfig
 }
 
 // createDockerClient creates a Docker client from configuration

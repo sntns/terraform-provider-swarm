@@ -2,7 +2,6 @@ package resources
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
@@ -12,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	tfTypes "github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/sntns/terraform-provider-swarm/internal/docker"
 )
 
 // Ensure the implementation satisfies the expected interfaces.
@@ -27,16 +27,28 @@ func NewSwarmInitResource() resource.Resource {
 
 // swarmInitResource is the resource implementation.
 type swarmInitResource struct {
-	client *client.Client
+	nodeConfigs map[string]*DockerClientConfig
+	client      *client.Client
 }
 
 // swarmInitResourceModel maps the resource schema data.
 type swarmInitResourceModel struct {
-	ID            tfTypes.String `tfsdk:"id"`
-	AdvertiseAddr tfTypes.String `tfsdk:"advertise_addr"`
-	ListenAddr    tfTypes.String `tfsdk:"listen_addr"`
-	ManagerToken  tfTypes.String `tfsdk:"manager_token"`
-	WorkerToken   tfTypes.String `tfsdk:"worker_token"`
+	ID            tfTypes.String      `tfsdk:"id"`
+	AdvertiseAddr tfTypes.String      `tfsdk:"advertise_addr"`
+	ListenAddr    tfTypes.String      `tfsdk:"listen_addr"`
+	ManagerToken  tfTypes.String      `tfsdk:"manager_token"`
+	WorkerToken   tfTypes.String      `tfsdk:"worker_token"`
+	Node          *swarmInitNodeModel `tfsdk:"node"`
+}
+
+type swarmInitNodeModel struct {
+	Host         tfTypes.String `tfsdk:"host"`
+	Context      tfTypes.String `tfsdk:"context"`
+	SSHOpts      tfTypes.List   `tfsdk:"ssh_opts"`
+	CertMaterial tfTypes.String `tfsdk:"cert_material"`
+	KeyMaterial  tfTypes.String `tfsdk:"key_material"`
+	CaMaterial   tfTypes.String `tfsdk:"ca_material"`
+	CertPath     tfTypes.String `tfsdk:"cert_path"`
 }
 
 // Metadata returns the resource type name.
@@ -49,6 +61,7 @@ func (r *swarmInitResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 	resp.Schema = schema.Schema{
 		Description: "Initialize a Docker Swarm cluster.",
 		Attributes: map[string]schema.Attribute{
+			"node": docker.NodeSchema,
 			"id": schema.StringAttribute{
 				Description: "Swarm cluster ID",
 				Computed:    true,
@@ -78,75 +91,50 @@ func (r *swarmInitResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 	}
 }
 
-// Configure adds the provider configured client to the resource.
+// Plus de configuration à faire côté provider
 func (r *swarmInitResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-
-	// Support both old single config and new multi-node config for backward compatibility
-	if clientConfig, ok := req.ProviderData.(*DockerClientConfig); ok {
-		// Legacy single config support
-		dockerClient, err := createDockerClient(clientConfig)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Unable to Create Docker Client",
-				"An unexpected error occurred when creating the Docker client. "+
-					"If the error is not clear, please contact the provider developers.\n\n"+
-					"Docker Client Error: "+err.Error(),
-			)
-			return
-		}
-		r.client = dockerClient
-		return
-	}
-
-	// New multi-node provider data
-	providerData, ok := req.ProviderData.(*SwarmProviderData)
-	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *SwarmProviderData or *DockerClientConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-		return
-	}
-
-	// Use default config for swarm init (can be enhanced later to support node selection)
-	dockerClient, err := createDockerClient(providerData.DefaultConfig)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Unable to Create Docker Client",
-			"An unexpected error occurred when creating the Docker client. "+
-				"If the error is not clear, please contact the provider developers.\n\n"+
-				"Docker Client Error: "+err.Error(),
-		)
-		return
-	}
-
-	r.client = dockerClient
 }
 
 // Create creates the resource and sets the initial Terraform state.
 func (r *swarmInitResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan swarmInitResourceModel
+	var plan struct {
+		Node          docker.TfNode  `tfsdk:"node"`
+		AdvertiseAddr tfTypes.String `tfsdk:"advertise_addr"`
+		ListenAddr    tfTypes.String `tfsdk:"listen_addr"`
+		ID            tfTypes.String `tfsdk:"id"`
+		ManagerToken  tfTypes.String `tfsdk:"manager_token"`
+		WorkerToken   tfTypes.String `tfsdk:"worker_token"`
+	}
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
+	// Use shared extraction logic
+	dockerConfig := docker.ExtractConfig(plan.Node)
+	tflog.Debug(ctx, "Docker client config", map[string]interface{}{
+		"host":     dockerConfig.Host,
+		"ssh_opts": dockerConfig.SSHOpts,
+	})
+	dockerClient, err := dockerConfig.NewClient()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Create Docker Client",
+			"An unexpected error occurred when creating the Docker client. \n\nDocker Client Error: "+err.Error(),
+		)
+		return
+	}
+	r.client = dockerClient
+
 	// Initialize swarm
 	initRequest := swarm.InitRequest{}
-	
 	if !plan.AdvertiseAddr.IsNull() {
 		initRequest.AdvertiseAddr = plan.AdvertiseAddr.ValueString()
 	}
-	
 	if !plan.ListenAddr.IsNull() {
 		initRequest.ListenAddr = plan.ListenAddr.ValueString()
 	}
-
-	// Execute docker swarm init using API
 	nodeID, err := r.client.SwarmInit(ctx, initRequest)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -155,12 +143,9 @@ func (r *swarmInitResource) Create(ctx context.Context, req resource.CreateReque
 		)
 		return
 	}
-
 	tflog.Trace(ctx, "initialized swarm", map[string]interface{}{
 		"node_id": nodeID,
 	})
-
-	// Get swarm info to retrieve cluster ID
 	swarmInfo, err := r.client.SwarmInspect(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -169,9 +154,6 @@ func (r *swarmInitResource) Create(ctx context.Context, req resource.CreateReque
 		)
 		return
 	}
-
-	// Get join tokens using Docker API - SwarmInspect includes JoinTokens
-	// Refresh swarm info to get the latest tokens
 	swarmInfoWithTokens, err := r.client.SwarmInspect(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -180,14 +162,23 @@ func (r *swarmInitResource) Create(ctx context.Context, req resource.CreateReque
 		)
 		return
 	}
-
-	// Map response body to schema and populate Computed attribute values
-	plan.ID = tfTypes.StringValue(swarmInfo.ID)
-	plan.ManagerToken = tfTypes.StringValue(swarmInfoWithTokens.JoinTokens.Manager)
-	plan.WorkerToken = tfTypes.StringValue(swarmInfoWithTokens.JoinTokens.Worker)
-
-	// Set state to fully populated data
-	diags = resp.State.Set(ctx, plan)
+	state := swarmInitResourceModel{
+		ID:            tfTypes.StringValue(swarmInfo.ID),
+		AdvertiseAddr: plan.AdvertiseAddr,
+		ListenAddr:    plan.ListenAddr,
+		ManagerToken:  tfTypes.StringValue(swarmInfoWithTokens.JoinTokens.Manager),
+		WorkerToken:   tfTypes.StringValue(swarmInfoWithTokens.JoinTokens.Worker),
+		Node: &swarmInitNodeModel{
+			Host:         plan.Node.Host,
+			Context:      plan.Node.Context,
+			SSHOpts:      plan.Node.SSHOpts,
+			CertMaterial: plan.Node.CertMaterial,
+			KeyMaterial:  plan.Node.KeyMaterial,
+			CaMaterial:   plan.Node.CaMaterial,
+			CertPath:     plan.Node.CertPath,
+		},
+	}
+	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -203,8 +194,32 @@ func (r *swarmInitResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
+	// Recreate Docker client from state.Node
+	var sshOpts []string
+	if state.Node != nil && state.Node.SSHOpts.Elements() != nil {
+		for _, opt := range state.Node.SSHOpts.Elements() {
+			sshOpts = append(sshOpts, opt.String())
+		}
+	}
+	dockerConfig := &docker.Config{
+		Host:     state.Node.Host.ValueString(),
+		SSHOpts:  sshOpts,
+		Cert:     state.Node.CertMaterial.ValueString(),
+		Key:      state.Node.KeyMaterial.ValueString(),
+		Ca:       state.Node.CaMaterial.ValueString(),
+		CertPath: state.Node.CertPath.ValueString(),
+	}
+	dockerClient, err := dockerConfig.NewClient()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Create Docker Client in Read",
+			"An unexpected error occurred when creating the Docker client in Read. \n\nDocker Client Error: "+err.Error(),
+		)
+		return
+	}
+
 	// Get current swarm info
-	swarmInfo, err := r.client.SwarmInspect(ctx)
+	swarmInfo, err := dockerClient.SwarmInspect(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Reading Swarm",
@@ -251,6 +266,33 @@ func (r *swarmInitResource) Delete(ctx context.Context, req resource.DeleteReque
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// Recreate Docker client from state.Node if needed
+	if r.client == nil {
+		var sshOpts []string
+		if state.Node != nil && state.Node.SSHOpts.Elements() != nil {
+			for _, opt := range state.Node.SSHOpts.Elements() {
+				sshOpts = append(sshOpts, opt.String())
+			}
+		}
+		dockerConfig := &docker.Config{
+			Host:     state.Node.Host.ValueString(),
+			SSHOpts:  sshOpts,
+			Cert:     state.Node.CertMaterial.ValueString(),
+			Key:      state.Node.KeyMaterial.ValueString(),
+			Ca:       state.Node.CaMaterial.ValueString(),
+			CertPath: state.Node.CertPath.ValueString(),
+		}
+		dockerClient, err := dockerConfig.NewClient()
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to Create Docker Client in Delete",
+				"An unexpected error occurred when creating the Docker client in Delete. \n\nDocker Client Error: "+err.Error(),
+			)
+			return
+		}
+		r.client = dockerClient
 	}
 
 	// Leave the swarm (force leave to ensure it works)
