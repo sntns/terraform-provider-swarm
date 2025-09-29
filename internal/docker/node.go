@@ -1,7 +1,7 @@
 package docker
 
 import (
-	"github.com/hashicorp/terraform-plugin-framework/action/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	tfTypes "github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -54,8 +54,12 @@ var NodeSchema = schema.SingleNestedAttribute{
 
 func ExtractConfig(node TfNode) Config {
 	sshOpts := []string{}
-	for _, opt := range node.SSHOpts.Elements() {
-		sshOpts = append(sshOpts, opt.String())
+	if !node.SSHOpts.IsNull() && !node.SSHOpts.IsUnknown() {
+		for _, opt := range node.SSHOpts.Elements() {
+			if strVal, ok := opt.(tfTypes.String); ok && !strVal.IsNull() {
+				sshOpts = append(sshOpts, strVal.ValueString())
+			}
+		}
 	}
 	return Config{
 		Host:     node.Host.ValueString(),

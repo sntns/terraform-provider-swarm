@@ -27,8 +27,7 @@ func NewSwarmInitResource() resource.Resource {
 
 // swarmInitResource is the resource implementation.
 type swarmInitResource struct {
-	nodeConfigs map[string]*DockerClientConfig
-	client      *client.Client
+	client *client.Client
 }
 
 // swarmInitResourceModel maps the resource schema data.

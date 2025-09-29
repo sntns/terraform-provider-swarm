@@ -1,10 +1,7 @@
 package resources
 
 import (
-	"crypto/tls"
-	"net/http"
-
-	"github.com/docker/docker/client"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 // DockerClientConfig represents the Docker client configuration
@@ -21,23 +18,12 @@ type SwarmProviderData struct {
 	NodeConfigs map[string]*DockerClientConfig
 }
 
-// createDockerClient creates a Docker client from configuration
-func createDockerClient(clientConfig *DockerClientConfig) (*client.Client, error) {
-	var httpClient *http.Client
-	if clientConfig.CertPath != "" && clientConfig.KeyPath != "" && clientConfig.CaPath != "" {
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}
-		httpClient = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
-		}
-	}
-
-	return client.NewClientWithOpts(
-		client.WithHost(clientConfig.Host),
-		client.WithAPIVersionNegotiation(),
-		client.WithHTTPClient(httpClient),
-	)
+// SwarmProviderModel represents the provider configuration schema
+type SwarmProviderModel struct {
+	Host         types.String `tfsdk:"host"`
+	CertPath     types.String `tfsdk:"cert_path"`
+	KeyPath      types.String `tfsdk:"key_path"`
+	CaPath       types.String `tfsdk:"ca_path"`
+	APIVersion   types.String `tfsdk:"api_version"`
+	RegistryAuth types.Map    `tfsdk:"registry_auth"`
 }

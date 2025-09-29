@@ -28,7 +28,9 @@ type Config struct {
 
 // buildHTTPClientFromBytes builds the http client from bytes (content of the files)
 func buildHTTPClientFromBytes(caPEMCert, certPEMBlock, keyPEMBlock []byte) (*http.Client, error) {
-	tlsConfig := &tls.Config{}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12, // Fix gosec G402: Set minimum TLS version
+	}
 	if certPEMBlock != nil && keyPEMBlock != nil {
 		tlsCert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
 		if err != nil {
