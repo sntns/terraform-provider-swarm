@@ -2,12 +2,15 @@ package provider
 
 import (
 	"context"
+	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/sntns/terraform-provider-swarm/internal/docker"
 	"github.com/sntns/terraform-provider-swarm/internal/resources"
 )
 
@@ -34,13 +37,106 @@ func (p *swarmProvider) Metadata(_ context.Context, _ provider.MetadataRequest, 
 func (p *swarmProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "The Swarm provider allows you to manage Docker Swarm clusters.",
-		Attributes:  map[string]schema.Attribute{},
+		Attributes: map[string]schema.Attribute{
+			"host": schema.StringAttribute{
+				Description: "Docker daemon host. Defaults to unix:///var/run/docker.sock",
+				Optional:    true,
+			},
+			"cert_path": schema.StringAttribute{
+				Description: "Path to directory with Docker TLS config",
+				Optional:    true,
+			},
+			"key_path": schema.StringAttribute{
+				Description: "Path to Docker client private key",
+				Optional:    true,
+			},
+			"ca_path": schema.StringAttribute{
+				Description: "Path to Docker CA certificate",
+				Optional:    true,
+			},
+			"api_version": schema.StringAttribute{
+				Description: "Docker API version to use",
+				Optional:    true,
+			},
+			"registry_auth": schema.MapAttribute{
+				Description: "Registry authentication configuration",
+				ElementType: types.StringType,
+				Optional:    true,
+				Sensitive:   true,
+			},
+		},
 	}
 }
 
 // Configure prepares a Docker client for data sources and resources.
 func (p *swarmProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	// No provider-level configuration
+	tflog.Info(ctx, "Configuring Swarm provider")
+	
+	var config resources.SwarmProviderModel
+	diags := req.Config.Get(ctx, &config)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Set defaults if not specified
+	host := config.Host.ValueString()
+	if host == "" {
+		if dockerHost := os.Getenv("DOCKER_HOST"); dockerHost != "" {
+			host = dockerHost
+		} else {
+			host = "unix:///var/run/docker.sock"
+		}
+	}
+
+	// Create Docker client configuration
+	dockerConfig := &docker.Config{
+		Host: host,
+	}
+
+	if !config.CertPath.IsNull() {
+		dockerConfig.CertPath = config.CertPath.ValueString()
+	}
+
+	// Create the Docker client
+	dockerClient, err := dockerConfig.NewClient()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Create Docker Client",
+			"An unexpected error occurred when creating the Docker client. "+
+				"Please verify your Docker configuration and ensure Docker is running.\n\n"+
+				"Docker Client Error: "+err.Error(),
+		)
+		return
+	}
+
+	// Test the connection
+	_, err = dockerClient.Info(ctx)
+	if err != nil {
+		resp.Diagnostics.AddWarning(
+			"Docker Connection Warning",
+			"Unable to connect to Docker daemon. Some resources may not work correctly.\n\n"+
+				"Docker Error: "+err.Error(),
+		)
+	}
+
+	// Store configuration for use in resources
+	providerData := &resources.SwarmProviderData{
+		NodeConfigs: map[string]*resources.DockerClientConfig{
+			"default": {
+				Host:       host,
+				CertPath:   config.CertPath.ValueString(),
+				APIVersion: config.APIVersion.ValueString(),
+			},
+		},
+	}
+
+	resp.DataSourceData = providerData
+	resp.ResourceData = providerData
+
+	tflog.Info(ctx, "Configured Swarm provider", map[string]any{
+		"host": host,
+	})
 }
 
 // DataSources defines the data sources implemented in the provider.
