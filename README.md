@@ -1,6 +1,7 @@
 # terraform-provider-swarm
 
 [![Terraform Registry](https://img.shields.io/badge/terraform-sntns%2Fswarm-7B42BC?logo=terraform)](https://registry.terraform.io/providers/sntns/swarm)
+[![OpenTofu Registry](https://img.shields.io/badge/opentofu-sntns%2Fswarm-FFDA18?logo=opentofu)](https://search.opentofu.org/provider/sntns/swarm)
 [![Latest release](https://img.shields.io/github/v/release/sntns/terraform-provider-swarm?sort=semver)](https://github.com/sntns/terraform-provider-swarm/releases/latest)
 [![Release](https://github.com/sntns/terraform-provider-swarm/actions/workflows/release.yml/badge.svg)](https://github.com/sntns/terraform-provider-swarm/actions/workflows/release.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -34,7 +35,7 @@ resource "swarm_cluster" "this" {
 
 ## Documentation
 
-On the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm/latest/docs):
+On the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm/latest/docs) and the [OpenTofu Registry](https://search.opentofu.org/provider/sntns/swarm/latest):
 
 - [The provider](docs/index.md): what it manages, what it needs, compatibility.
 - [`swarm_cluster`](docs/resources/cluster.md): every setting of a cluster and its nodes.
@@ -45,6 +46,10 @@ On the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm/
 ## Upgrading from v0.2
 
 1.0 replaces `swarm_init` and `swarm_join` with `swarm_cluster`: [the guide](docs/guides/upgrading-from-v0.2.md) moves a configuration without touching the running swarm.
+
+## Deploying on the cluster
+
+What runs on the swarm is another tool's: [nemo](https://github.com/sntns/nemo) and its provider [`sntns/nemo`](https://registry.terraform.io/providers/sntns/nemo) deploy stacks of versioned bundles on it, with the address of one of its managers.
 
 ## Development
 
@@ -61,3 +66,7 @@ docker run -d --privileged --name swarm-acc -e DOCKER_TLS_CERTDIR= -p 127.0.0.1:
 DOCKER_HOST=tcp://127.0.0.1:23750 TF_ACC=1 go test ./... -skip TestAccSwarmCluster_nodes
 TF_ACC=1 go test ./... -run TestAccSwarmCluster_nodes
 ```
+
+## Maintainers
+
+Made and maintained by [Sentiens](https://www.sentiens.fr) ([LinkedIn](https://www.linkedin.com/company/sntns)). Issues and pull requests are welcome.
