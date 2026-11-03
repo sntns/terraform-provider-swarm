@@ -3,7 +3,7 @@
 [![Terraform Registry](https://img.shields.io/badge/terraform-sntns%2Fswarm-7B42BC?logo=terraform)](https://registry.terraform.io/providers/sntns/swarm)
 [![Latest release](https://img.shields.io/github/v/release/sntns/terraform-provider-swarm?sort=semver)](https://github.com/sntns/terraform-provider-swarm/releases/latest)
 [![Release](https://github.com/sntns/terraform-provider-swarm/actions/workflows/release.yml/badge.svg)](https://github.com/sntns/terraform-provider-swarm/actions/workflows/release.yml)
-[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Manages Docker Swarm clusters from Terraform or OpenTofu. A `swarm_cluster` inits its cluster, or adopts one that runs already, and keeps its nodes as the configuration gives them: role, labels and availability. Each node gives its own Docker endpoint, so the provider takes no configuration.
 
