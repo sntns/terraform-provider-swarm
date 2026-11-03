@@ -1,211 +1,43 @@
-# Terraform Provider Swarm
+# Terraform provider for Docker Swarm
 
-[![Tests](https://github.com/sntns/terraform-provider-swarm/workflows/Tests/badge.svg)](https://github.com/sntns/terraform-provider-swarm/actions?query=workflow%3ATests)
-[![Release](https://github.com/sntns/terraform-provider-swarm/workflows/Release/badge.svg)](https://github.com/sntns/terraform-provider-swarm/actions?query=workflow%3ARelease)
-
-A Terraform provider for managing Docker Swarm clusters. This provider allows you to initialize Docker Swarm clusters and join nodes to existing clusters using the Terraform Plugin Framework.
-
-## Features
-
-- 🚀 **Initialize Docker Swarm clusters** with configurable settings
-- 🔗 **Join nodes** to existing swarm clusters as managers or workers  
-- 🔑 **Automatic token management** for secure node joining
-- 🌐 **Multiple connection methods** (Unix socket, TCP, SSH)
-- 🔒 **TLS support** for secure remote connections
-- 📝 **Comprehensive documentation** and examples
-
-## Requirements
-
-- [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.19 (for building from source)
-- [Docker](https://docs.docker.com/get-docker/) installed and running on target nodes
-
-## Quick Start
+Manages Docker Swarm clusters with Terraform or OpenTofu. A `swarm_cluster` inits its cluster, or adopts one that runs already, and keeps its nodes as the configuration gives them: role, labels and availability. Each node gives its own Docker endpoint, so the provider takes no configuration.
 
 ```hcl
-terraform {
-  required_providers {
-    swarm = {
-      source = "sntns/swarm"
+resource "swarm_cluster" "this" {
+  nodes = {
+    "node-1" = {
+      endpoint       = "tcp://10.0.0.11:2376"
+      advertise_addr = "10.0.0.11"
+      role           = "manager"
+      labels         = { zone = "a" }
     }
   }
-}
 
-provider "swarm" {
-  host = "unix:///var/run/docker.sock"
-}
-
-# Initialize swarm cluster
-resource "swarm_init" "cluster" {
-  advertise_addr = "192.168.1.100"
-  
-  node {
-    host = "unix:///var/run/docker.sock"
-  }
-}
-
-# Join worker node
-resource "swarm_join" "worker" {
-  join_token    = swarm_init.cluster.worker_token
-  remote_addrs  = ["192.168.1.100:2377"]
-  advertise_addr = "192.168.1.101"
-  
-  node {
-    host = "ssh://root@192.168.1.101"
+  tls = {
+    ca_pem   = file("ca.pem")
+    cert_pem = file("cert.pem")
+    key_pem  = file("key.pem")
   }
 }
 ```
 
-## Documentation
+The [documentation](docs/index.md) describes the resource; [the design](docs/design/swarm-cluster.md) explains how it reconciles a cluster.
 
-### Provider Configuration
-- [Provider Documentation](docs/provider.md) - Complete provider configuration reference
+## Status
 
-### Resources
-- [`swarm_init`](docs/resources/swarm_init.md) - Initialize a Docker Swarm cluster
-- [`swarm_join`](docs/resources/swarm_join.md) - Join nodes to a swarm cluster
-
-### Examples
-- [Simple Cluster](examples/simple-cluster/) - Basic single-node setup
-- [Multi-Node Cluster](examples/multi-node-cluster/) - Production-ready multi-node setup
-- [Examples README](examples/README.md) - Complete examples guide
-
-## Provider Configuration
-
-The provider supports multiple connection methods:
-
-### Unix Socket (Default)
-```hcl
-provider "swarm" {
-  # Uses unix:///var/run/docker.sock by default
-}
-```
-
-### Remote TCP Connection
-```hcl
-provider "swarm" {
-  host = "tcp://remote-host:2376"
-}
-```
-
-### SSH Connection
-```hcl
-provider "swarm" {
-  host = "ssh://user@remote-host"
-}
-```
-
-### TLS Configuration
-```hcl
-provider "swarm" {
-  host      = "tcp://remote-host:2376"
-  cert_path = "/path/to/docker/certs"
-}
-```
-
-## Building The Provider
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/sntns/terraform-provider-swarm.git
-   cd terraform-provider-swarm
-   ```
-
-2. Build the provider:
-   ```bash
-   go build -o terraform-provider-swarm
-   ```
-
-3. Install locally:
-   ```bash
-   make install
-   ```
+`main` is on its way to 1.0.0, which replaces v0.2's `swarm_init` and `swarm_join` with `swarm_cluster`. It manages clusters of one node for now: joining, promoting and removing nodes come next.
 
 ## Development
 
-### Prerequisites
-- Go 1.19+ installed
-- Docker installed and running
-- Make (optional, for convenience commands)
-
-### Running Tests
-```bash
-# Unit tests
-go test ./...
-
-# Acceptance tests (requires Docker)
-TF_ACC=1 go test ./... -v
-
-# Lint code
-golangci-lint run
+```sh
+make            # lint and unit tests
+make generate   # the docs, from the schema and examples/
+make testacc    # acceptance tests
 ```
 
-### Project Structure
+The acceptance tests init and leave swarms on the Docker of `DOCKER_HOST`, else the local socket, and refuse a Docker that is in a swarm already. On a machine whose Docker runs one, give them a throwaway daemon:
+
+```sh
+docker run -d --privileged --name swarm-acc -e DOCKER_TLS_CERTDIR= -p 127.0.0.1:23750:2375 docker:29-dind
+DOCKER_HOST=tcp://127.0.0.1:23750 make testacc
 ```
-├── internal/
-│   ├── provider/     # Provider implementation
-│   ├── resources/    # Resource implementations  
-│   └── docker/       # Docker client management
-├── examples/         # Example configurations
-├── docs/            # Documentation
-└── test/            # Test configurations
-```
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-### Development Workflow
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with tests
-4. Run tests and linting (`go test ./...` and `golangci-lint run`)
-5. Commit your changes (`git commit -am 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
-
-## Architecture
-
-This provider follows Terraform Plugin Framework best practices:
-
-- **Provider**: Handles configuration and Docker client setup
-- **Resources**: Implement CRUD operations for swarm management
-- **Docker Client**: Abstracted client handling with multiple connection methods
-- **Testing**: Comprehensive unit and acceptance test suite
-- **Documentation**: Complete user and developer documentation
-
-### Security Features
-- TLS 1.2+ for secure connections
-- Sensitive data handling for join tokens
-- SSH key-based authentication support
-- Certificate validation for TLS connections
-
-## Troubleshooting
-
-### Common Issues
-
-**Connection Refused**
-- Ensure Docker daemon is running: `systemctl status docker`
-- Check firewall settings for ports 2377, 7946, 4789
-- Verify network connectivity between nodes
-
-**Permission Denied**  
-- Add user to docker group: `usermod -aG docker $USER`
-- Check SSH key permissions: `chmod 600 ~/.ssh/id_rsa`
-
-**TLS Verification Failed**
-- Verify certificate paths and permissions
-- Check that certificates match the hostname
-- Use `DOCKER_TLS_VERIFY=1` environment variable if needed
-
-For more troubleshooting help, see the [Examples README](examples/README.md).
-
-## License
-
-This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built with [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework)
-- Uses [Docker Go SDK](https://github.com/docker/docker) for swarm management
-- Inspired by the Docker and Terraform communities

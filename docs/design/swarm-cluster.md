@@ -1,6 +1,6 @@
 # Design: one `swarm_cluster` resource for the whole cluster
 
-Status: reviewed (step 1 of 3). Version 1.0.0 replaces v0.2's resources with the one described here.
+Status: reviewed; step 2 of 3, one node, implemented. Version 1.0.0 replaces v0.2's resources with the one described here.
 
 ## Why v0.2 is rewritten
 
@@ -56,7 +56,7 @@ resource "swarm_cluster" "this" {
 | Attribute | |
 |---|---|
 | `nodes` | **Required.** The nodes by a name of the configuration's choosing, which is not Docker's hostname. At least one `manager`. |
-| `nodes.<name>.endpoint` | **Required.** The node's Docker: `tcp://HOST:PORT` (TLS) or `ssh://USER@HOST`. It may be unknown at plan time, when the machine is created in the same apply. |
+| `nodes.<name>.endpoint` | **Required.** The node's Docker: `tcp://HOST:PORT` (TLS), `ssh://USER@HOST` or `unix:///PATH`. It may be unknown at plan time, when the machine is created in the same apply. |
 | `nodes.<name>.advertise_addr` | The address the other nodes reach this one on. Default: Docker's choice. |
 | `nodes.<name>.role` | `manager` or `worker`. Default `worker`. |
 | `nodes.<name>.labels` | The node's labels. Authoritative: a label the configuration does not give is removed. |
@@ -67,7 +67,7 @@ resource "swarm_cluster" "this" {
 | `leave_on_destroy` | Whether destroying the resource makes every node leave the swarm. Default `false`: the cluster stays, only Terraform forgets it. |
 | `timeouts` | `create`, `read`, `update`, `delete`. How long to wait for daemons that do not answer yet. |
 
-**Read-only:** `cluster_id`, `manager_addresses`, `join_tokens.manager` and `join_tokens.worker` (sensitive), and per node `node_id`, `reachable` and `status`.
+**Read-only:** `id`, the cluster's, `manager_addresses`, `join_tokens.manager` and `join_tokens.worker` (sensitive), and per node `node_id`, `reachable` and `status`.
 
 The provider block takes nothing: each node carries its own endpoint, so one configuration can manage several clusters.
 
@@ -87,7 +87,7 @@ Every create and update runs the same loop, from what Docker says, not from the 
 
 **Delete** forgets the cluster. With `leave_on_destroy`, it removes the workers, then the managers but the last, then makes the last one leave.
 
-**Import** takes the endpoint of a manager: `terraform import swarm_cluster.this tcp://10.0.0.11:2376`. The configuration then names the nodes.
+**Import** takes the cluster's ID, as `docker info --format '{{.Swarm.Cluster.ID}}'` gives it: `terraform import swarm_cluster.this z7c2akjkcp231l8f6w91lta26`. An import ID cannot carry the TLS that reaches an endpoint, so the next apply reaches the configuration's nodes, which must be in that cluster, and records them.
 
 ## Out of scope
 
