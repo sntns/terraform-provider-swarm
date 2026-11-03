@@ -23,11 +23,11 @@ The swarm provider manages [Docker Swarm](https://docs.docker.com/engine/swarm/)
 | OpenTofu | 1.6 or later |
 | Docker Engine on the nodes | any with Swarm mode |
 
-The provider is published on the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm) as `sntns/swarm`.
+The provider is published on the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm) and the [OpenTofu Registry](https://search.opentofu.org/provider/sntns/swarm), as `sntns/swarm` on both.
 
 ## What it leaves to other tools
 
-Services, stacks, configs, secrets and networks belong to the tool that deploys what runs on the cluster; the machines, to the cloud's provider.
+Services, stacks, configs, secrets and networks belong to the tool that deploys what runs on the cluster; the machines, to the cloud's provider. [`sntns/nemo`](https://registry.terraform.io/providers/sntns/nemo) is one such tool: it deploys stacks of versioned bundles on the cluster, through one of its managers.
 
 {{ .SchemaMarkdown | trimspace }}
 
@@ -35,3 +35,8 @@ Services, stacks, configs, secrets and networks belong to the tool that deploys 
 
 - [Upgrading from v0.2](guides/upgrading-from-v0.2): replace `swarm_init` and `swarm_join` with `swarm_cluster`, without touching the running swarm.
 
+## Support
+
+Report a bug or ask for a feature in the [provider's issues](https://github.com/sntns/terraform-provider-swarm/issues).
+
+Maintained by [Sentiens](https://www.sentiens.fr) ([LinkedIn](https://www.linkedin.com/company/sntns)).
