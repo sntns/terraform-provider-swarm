@@ -1,6 +1,6 @@
 # Design: one `swarm_cluster` resource for the whole cluster
 
-Status: proposal, for review before any code (step 1 of 3). Version 1.0.0 replaces v0.2's resources with the one described here.
+Status: reviewed (step 1 of 3). Version 1.0.0 replaces v0.2's resources with the one described here.
 
 ## Why v0.2 is rewritten
 
@@ -113,9 +113,9 @@ The upgrade guide will give the commands.
 - **Step 2, one node:** init, adoption, read of an unreachable daemon, delete, import. Acceptance tests on the CI runner's Docker.
 - **Step 3, several nodes:** join, roles, labels, availability, removal with drain, loss of a node, the quorum check. Acceptance tests in Docker-in-Docker, 3 managers and 1 worker. Release `v1.0.0`.
 
-## To decide at review
+## Decided at review
 
-1. **`leave_on_destroy` defaults to `false`.** Destroying the resource then keeps the cluster: safer for clusters that run workloads, at the cost of a cluster Terraform no longer knows.
-2. **Labels are authoritative.** The alternative is to manage only the keys the configuration gives, and leave the others, which tools may set.
-3. **Waiting for a daemon** uses the resource's `timeouts`. The alternative is a separate `connect_timeout` per node.
-4. **The node's name** is the configuration's key, not Docker's hostname. Matching Docker's node is done by its endpoint, and then its `node_id`.
+1. **`leave_on_destroy` defaults to `false`.** Destroying the resource keeps the cluster: safer for clusters that run workloads, at the cost of a cluster Terraform no longer knows.
+2. **Labels are authoritative.** A label set by hand shows in the plan as one to remove, rather than steering placement unseen. Should a tool set its own labels one day, a list of keys to ignore can come then, as the AWS provider's `ignore_tags`.
+3. **Waiting for a daemon** uses the resource's `timeouts`, not a separate `connect_timeout` per node.
+4. **A node's name is the configuration's key**, not Docker's hostname, which a reinstalled node shares with its own ghost. The daemon behind the endpoint says which node it is (`docker info` gives its node ID), and the state keeps that ID. A changed endpoint that answers with the same ID is the same node. A node that does not answer is found among the managers' by that ID. A reinstalled node answers that it is in no swarm: it joins, and its ghost is removed. Two entries whose daemons give the same ID are an error.
