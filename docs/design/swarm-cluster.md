@@ -1,6 +1,6 @@
 # Design: one `swarm_cluster` resource for the whole cluster
 
-Status: reviewed; step 2 of 3, one node, implemented. Version 1.0.0 replaces v0.2's resources with the one described here.
+Status: implemented in 1.0.0. Version 1.0.0 replaces v0.2's resources with the one described here.
 
 ## Why v0.2 is rewritten
 
@@ -106,12 +106,12 @@ v0.2's resources go. A configuration that used them:
 1. removes `swarm_init` and `swarm_join` from its state, with `terraform state rm`, which leaves the cluster running;
 2. declares `swarm_cluster` with the same nodes: the first apply adopts the running cluster, and changes only what differs.
 
-The upgrade guide will give the commands.
+The [upgrade guide](../guides/upgrading-from-v0.2.md) gives the commands.
 
-## Next steps
+## Steps
 
-- **Step 2, one node:** init, adoption, read of an unreachable daemon, delete, import. Acceptance tests on the CI runner's Docker.
-- **Step 3, several nodes:** join, roles, labels, availability, removal with drain, loss of a node, the quorum check. Acceptance tests in Docker-in-Docker, 3 managers and 1 worker. Release `v1.0.0`.
+- **Step 2, one node** (#8): init, adoption, read of an unreachable daemon, delete, import. Acceptance tests on the CI runner's Docker.
+- **Step 3, several nodes**: join, roles, labels, availability, removal with drain, loss of a node, the quorum check. Acceptance tests in Docker-in-Docker, 3 managers and 1 worker. Release `v1.0.0`.
 
 ## Decided at review
 

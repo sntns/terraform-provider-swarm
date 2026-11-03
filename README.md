@@ -39,11 +39,12 @@ On the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm/
 - [The provider](docs/index.md): what it manages, what it needs, compatibility.
 - [`swarm_cluster`](docs/resources/cluster.md): every setting of a cluster and its nodes.
 - [The `swarm_cluster` data source](docs/data-sources/cluster.md): a cluster's tokens and nodes, read from a manager.
+- [Upgrading from v0.2](docs/guides/upgrading-from-v0.2.md): from `swarm_init` and `swarm_join` to `swarm_cluster`.
 - [The design](docs/design/swarm-cluster.md): how a cluster is reconciled, and why.
 
-## Status
+## Upgrading from v0.2
 
-`main` is on its way to 1.0.0, which replaces v0.2's `swarm_init` and `swarm_join` with `swarm_cluster`. It manages clusters of one node for now: joining, promoting and removing nodes come next.
+1.0 replaces `swarm_init` and `swarm_join` with `swarm_cluster`: [the guide](docs/guides/upgrading-from-v0.2.md) moves a configuration without touching the running swarm.
 
 ## Development
 
@@ -53,9 +54,10 @@ make generate   # the docs, from the schema, templates/ and examples/
 make testacc    # acceptance tests
 ```
 
-The acceptance tests init and leave swarms on the Docker of `DOCKER_HOST`, else the local socket, and refuse a Docker that is in a swarm already. On a machine whose Docker runs one, give them a throwaway daemon:
+The acceptance tests run on the Docker of `DOCKER_HOST`, else the local socket. The tests of one node init and leave swarms on it, and refuse a Docker that is in a swarm already; the test of several nodes starts four `docker:dind` containers there and leaves its own swarm alone. On a machine whose Docker runs a swarm, give the first ones a throwaway daemon:
 
 ```sh
 docker run -d --privileged --name swarm-acc -e DOCKER_TLS_CERTDIR= -p 127.0.0.1:23750:2375 docker:29-dind
-DOCKER_HOST=tcp://127.0.0.1:23750 make testacc
+DOCKER_HOST=tcp://127.0.0.1:23750 TF_ACC=1 go test ./... -skip TestAccSwarmCluster_nodes
+TF_ACC=1 go test ./... -run TestAccSwarmCluster_nodes
 ```

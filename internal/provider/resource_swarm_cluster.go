@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"time"
 
@@ -118,7 +119,9 @@ func (r *swarmClusterResource) Schema(ctx context.Context, _ resource.SchemaRequ
 	}
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A Docker Swarm cluster and its nodes. Each create and update reconciles the cluster from what Docker says: " +
-			"it adopts the cluster its managers are in, or the first manager by name inits one, then sets each node's role, labels and availability. " +
+			"it adopts the cluster its managers are in, or the first manager by name inits one; the nodes in no swarm join it, managers first; " +
+			"promotions come before demotions; and the nodes the configuration no longer has are drained until their tasks run elsewhere, demoted, made to leave, and removed. " +
+			"A change that would keep fewer than a majority of the managers ready is refused at plan time: add the new managers in one apply, remove the old ones in the next. " +
 			"Destroying it keeps the cluster, unless `leave_on_destroy` is set.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -234,17 +237,11 @@ func (r *swarmClusterResource) Schema(ctx context.Context, _ resource.SchemaRequ
 	}
 }
 
-// ValidateConfig refuses a cluster without a manager. Until the nodes join
-// each other, a cluster has one node.
+// ValidateConfig refuses a cluster without a manager.
 func (r *swarmClusterResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var nodes types.Map
 	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("nodes"), &nodes)...)
 	if resp.Diagnostics.HasError() || nodes.IsNull() || nodes.IsUnknown() {
-		return
-	}
-	if len(nodes.Elements()) > 1 {
-		resp.Diagnostics.AddAttributeError(path.Root("nodes"), "Several nodes",
-			"This version of the provider manages clusters of one node: joining other nodes comes with the next one.")
 		return
 	}
 	for _, element := range nodes.Elements() {
@@ -260,8 +257,9 @@ func (r *swarmClusterResource) ValidateConfig(ctx context.Context, req resource.
 	resp.Diagnostics.AddAttributeError(path.Root("nodes"), "No manager", "At least one node must have the role `manager`.")
 }
 
-// ModifyPlan refuses a change of the init settings, and plans an update for
-// a node that the last read found in no swarm, so that it joins again.
+// ModifyPlan refuses a change of the init settings and a change that would
+// lose the raft's quorum, and plans an update for a node that the last read
+// found in no swarm, so that it joins again.
 func (r *swarmClusterResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() || req.State.Raw.IsNull() {
 		return
@@ -285,6 +283,17 @@ func (r *swarmClusterResource) ModifyPlan(ctx context.Context, req resource.Modi
 	if resp.Diagnostics.HasError() || nodes.IsUnknown() {
 		return
 	}
+	plannedNodes := map[string]nodeModel{}
+	resp.Diagnostics.Append(nodes.ElementsAs(ctx, &plannedNodes, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if kept, total, ok := quorumKept(state.Nodes, plannedNodes); !ok {
+		resp.Diagnostics.AddAttributeError(path.Root("nodes"), "Quorum lost",
+			fmt.Sprintf("The plan keeps %d of the cluster's %d managers ready: the raft needs %d of them while the others are demoted or removed. "+
+				"Add the new managers in one apply, then demote or remove the old ones in the next.", kept, total, total/2+1))
+		return
+	}
 	for name, node := range state.Nodes {
 		if _, planned := nodes.Elements()[name]; planned && node.NodeID.IsNull() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("nodes").AtMapKey(name).AtName("node_id"), types.StringUnknown())...)
@@ -306,7 +315,7 @@ func (r *swarmClusterResource) Create(ctx context.Context, req resource.CreateRe
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp.Diagnostics.Append(reconcile(ctx, &plan, "")...)
+	resp.Diagnostics.Append(reconcile(ctx, &plan, nil)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -360,7 +369,7 @@ func (r *swarmClusterResource) Update(ctx context.Context, req resource.UpdateRe
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp.Diagnostics.Append(reconcile(ctx, &plan, state.ID.ValueString())...)
+	resp.Diagnostics.Append(reconcile(ctx, &plan, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
