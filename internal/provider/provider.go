@@ -45,5 +45,5 @@ func (p *swarmProvider) Resources(context.Context) []func() resource.Resource {
 }
 
 func (p *swarmProvider) DataSources(context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{NewSwarmClusterDataSource}
 }

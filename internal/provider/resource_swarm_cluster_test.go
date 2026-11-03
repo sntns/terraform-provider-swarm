@@ -145,6 +145,17 @@ func TestAccSwarmCluster_basic(t *testing.T) {
 				},
 			},
 			{
+				ResourceName:    "swarm_cluster.test",
+				ImportState:     true,
+				ImportStateKind: resource.ImportBlockWithResourceIdentity,
+				Config:          config(`{ zone = "b" }`, "drain", 4790),
+				// The import knows the cluster's ID only: the apply records the configuration's nodes.
+				ExpectNonEmptyPlan: true,
+				ImportPlanChecks: resource.ImportPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("swarm_cluster.test", plancheck.ResourceActionUpdate)},
+				},
+			},
+			{
 				PreConfig: func() {
 					_, err := api.SwarmLeave(context.Background(), client.SwarmLeaveOptions{Force: true})
 					require.NoError(t, err)

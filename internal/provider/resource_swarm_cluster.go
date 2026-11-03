@@ -9,8 +9,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/mapvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -21,6 +23,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
@@ -30,6 +33,7 @@ var (
 	_ resource.ResourceWithImportState    = &swarmClusterResource{}
 	_ resource.ResourceWithModifyPlan     = &swarmClusterResource{}
 	_ resource.ResourceWithValidateConfig = &swarmClusterResource{}
+	_ resource.ResourceWithIdentity       = &swarmClusterResource{}
 )
 
 const (
@@ -48,6 +52,12 @@ type clusterModel struct {
 	ManagerAddresses types.List           `tfsdk:"manager_addresses"`
 	JoinTokens       types.Object         `tfsdk:"join_tokens"`
 	Timeouts         timeouts.Value       `tfsdk:"timeouts"`
+}
+
+// clusterIdentityModel identifies a cluster by its ID, for an import block
+// that gives an identity rather than an ID.
+type clusterIdentityModel struct {
+	ID types.String `tfsdk:"id"`
 }
 
 type nodeModel struct {
@@ -84,6 +94,14 @@ func NewSwarmClusterResource() resource.Resource {
 
 func (r *swarmClusterResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_cluster"
+}
+
+func (r *swarmClusterResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identityschema.Schema{
+		Attributes: map[string]identityschema.Attribute{
+			"id": identityschema.StringAttribute{Description: "The cluster's ID, as Docker gives it.", RequiredForImport: true},
+		},
+	}
 }
 
 func (r *swarmClusterResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
@@ -293,12 +311,17 @@ func (r *swarmClusterResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setIdentity(ctx, resp.Identity, plan.ID, &resp.Diagnostics)
 }
 
 func (r *swarmClusterResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state clusterModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() || len(state.Nodes) == 0 {
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if len(state.Nodes) == 0 {
+		setIdentity(ctx, resp.Identity, state.ID, &resp.Diagnostics)
 		return
 	}
 	timeout, diags := state.Timeouts.Read(ctx, defaultReadTimeout)
@@ -319,6 +342,7 @@ func (r *swarmClusterResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setIdentity(ctx, resp.Identity, state.ID, &resp.Diagnostics)
 }
 
 func (r *swarmClusterResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -341,6 +365,7 @@ func (r *swarmClusterResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setIdentity(ctx, resp.Identity, plan.ID, &resp.Diagnostics)
 }
 
 func (r *swarmClusterResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -360,9 +385,16 @@ func (r *swarmClusterResource) Delete(ctx context.Context, req resource.DeleteRe
 	resp.Diagnostics.Append(leave(ctx, &state)...)
 }
 
-// ImportState takes the cluster's ID, as `docker info` gives it: the next
-// apply reaches the nodes of the configuration, which must be in that
-// cluster, and records them.
+// ImportState takes the cluster's ID, as `docker info` gives it, or its
+// identity: the next apply reaches the nodes of the configuration, which
+// must be in that cluster, and records them.
 func (r *swarmClusterResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), req, resp)
+}
+
+func setIdentity(ctx context.Context, identity *tfsdk.ResourceIdentity, id types.String, diags *diag.Diagnostics) {
+	if identity == nil {
+		return
+	}
+	diags.Append(identity.Set(ctx, clusterIdentityModel{ID: id})...)
 }

@@ -183,50 +183,70 @@ func read(ctx context.Context, state *clusterModel) (gone bool, diags diag.Diagn
 	return false, observe(ctx, state, daemons, manager)
 }
 
-// observe records what the manager reports of the cluster and its nodes.
-// A node is Docker's whose ID its daemon gives, else the one the state
-// holds, for a node that does not answer.
-func observe(ctx context.Context, model *clusterModel, daemons map[string]*daemon, manager *daemon) diag.Diagnostics {
+// clusterView is a cluster as one of its managers reports it.
+type clusterView struct {
+	ID               types.String
+	Init             types.Object
+	JoinTokens       types.Object
+	ManagerAddresses types.List
+	Nodes            []swarm.Node
+}
+
+// inspect reads the cluster from one of its managers.
+func inspect(ctx context.Context, api *client.Client) (clusterView, diag.Diagnostics) {
+	var view clusterView
 	var diags diag.Diagnostics
-	inspected, err := manager.api.SwarmInspect(ctx, client.SwarmInspectOptions{})
+	inspected, err := api.SwarmInspect(ctx, client.SwarmInspectOptions{})
 	if err != nil {
 		diags.AddError("Swarm inspect failed", err.Error())
-		return diags
+		return view, diags
 	}
-	listed, err := manager.api.NodeList(ctx, client.NodeListOptions{})
+	listed, err := api.NodeList(ctx, client.NodeListOptions{})
 	if err != nil {
 		diags.AddError("Node list failed", err.Error())
-		return diags
+		return view, diags
 	}
 	cluster := inspected.Swarm
 
-	model.ID = types.StringValue(cluster.ID)
+	view.ID = types.StringValue(cluster.ID)
 	pool := make([]attr.Value, 0, len(cluster.DefaultAddrPool))
 	for _, prefix := range cluster.DefaultAddrPool {
 		pool = append(pool, types.StringValue(prefix.String()))
 	}
-	model.Init = types.ObjectValueMust(initTypes, map[string]attr.Value{
+	view.Init = types.ObjectValueMust(initTypes, map[string]attr.Value{
 		"default_addr_pool": types.ListValueMust(types.StringType, pool),
 		"subnet_size":       types.Int64Value(int64(cluster.SubnetSize)),
 		"data_path_port":    types.Int64Value(int64(cluster.DataPathPort)),
 	})
-	model.JoinTokens = types.ObjectValueMust(joinTokensTypes, map[string]attr.Value{
+	view.JoinTokens = types.ObjectValueMust(joinTokensTypes, map[string]attr.Value{
 		"manager": types.StringValue(cluster.JoinTokens.Manager),
 		"worker":  types.StringValue(cluster.JoinTokens.Worker),
 	})
-
-	byID := map[string]swarm.Node{}
 	var addresses []string
 	for _, node := range listed.Items {
-		byID[node.ID] = node
 		if node.ManagerStatus != nil {
 			addresses = append(addresses, node.ManagerStatus.Addr)
 		}
 	}
 	slices.Sort(addresses)
-	var d diag.Diagnostics
-	model.ManagerAddresses, d = types.ListValueFrom(ctx, types.StringType, addresses)
-	diags.Append(d...)
+	view.ManagerAddresses, diags = types.ListValueFrom(ctx, types.StringType, addresses)
+	view.Nodes = listed.Items
+	return view, diags
+}
+
+// observe records what the manager reports of the cluster and its nodes.
+// A node is Docker's whose ID its daemon gives, else the one the state
+// holds, for a node that does not answer.
+func observe(ctx context.Context, model *clusterModel, daemons map[string]*daemon, manager *daemon) diag.Diagnostics {
+	view, diags := inspect(ctx, manager.api)
+	if diags.HasError() {
+		return diags
+	}
+	model.ID, model.Init, model.JoinTokens, model.ManagerAddresses = view.ID, view.Init, view.JoinTokens, view.ManagerAddresses
+	byID := map[string]swarm.Node{}
+	for _, node := range view.Nodes {
+		byID[node.ID] = node
+	}
 
 	for name, node := range model.Nodes {
 		id := node.NodeID.ValueString()

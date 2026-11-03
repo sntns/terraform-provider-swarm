@@ -1,8 +1,19 @@
-# Terraform provider for Docker Swarm
+# terraform-provider-swarm
 
-Manages Docker Swarm clusters with Terraform or OpenTofu. A `swarm_cluster` inits its cluster, or adopts one that runs already, and keeps its nodes as the configuration gives them: role, labels and availability. Each node gives its own Docker endpoint, so the provider takes no configuration.
+[![Terraform Registry](https://img.shields.io/badge/terraform-sntns%2Fswarm-7B42BC?logo=terraform)](https://registry.terraform.io/providers/sntns/swarm)
+[![Latest release](https://img.shields.io/github/v/release/sntns/terraform-provider-swarm?sort=semver)](https://github.com/sntns/terraform-provider-swarm/releases/latest)
+[![Release](https://github.com/sntns/terraform-provider-swarm/actions/workflows/release.yml/badge.svg)](https://github.com/sntns/terraform-provider-swarm/actions/workflows/release.yml)
+[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
+
+Manages Docker Swarm clusters from Terraform or OpenTofu. A `swarm_cluster` inits its cluster, or adopts one that runs already, and keeps its nodes as the configuration gives them: role, labels and availability. Each node gives its own Docker endpoint, so the provider takes no configuration.
 
 ```hcl
+terraform {
+  required_providers {
+    swarm = { source = "sntns/swarm" }
+  }
+}
+
 resource "swarm_cluster" "this" {
   nodes = {
     "node-1" = {
@@ -21,7 +32,14 @@ resource "swarm_cluster" "this" {
 }
 ```
 
-The [documentation](docs/index.md) describes the resource; [the design](docs/design/swarm-cluster.md) explains how it reconciles a cluster.
+## Documentation
+
+On the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm/latest/docs):
+
+- [The provider](docs/index.md): what it manages, what it needs, compatibility.
+- [`swarm_cluster`](docs/resources/cluster.md): every setting of a cluster and its nodes.
+- [The `swarm_cluster` data source](docs/data-sources/cluster.md): a cluster's tokens and nodes, read from a manager.
+- [The design](docs/design/swarm-cluster.md): how a cluster is reconciled, and why.
 
 ## Status
 
@@ -31,7 +49,7 @@ The [documentation](docs/index.md) describes the resource; [the design](docs/des
 
 ```sh
 make            # lint and unit tests
-make generate   # the docs, from the schema and examples/
+make generate   # the docs, from the schema, templates/ and examples/
 make testacc    # acceptance tests
 ```
 
