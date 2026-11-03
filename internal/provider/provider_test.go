@@ -3,17 +3,22 @@ package provider
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
@@ -107,6 +112,67 @@ func newSwitchableProxy(t *testing.T) *switchableProxy {
 
 func (proxy *switchableProxy) endpoint() string {
 	return "tcp://" + proxy.listener.Addr().String()
+}
+
+// testNode is a Docker daemon in a docker:dind container, for the tests of
+// several nodes: the test reaches it at its endpoint, the other nodes at
+// its address.
+type testNode struct {
+	container, endpoint, address string
+}
+
+// startNodes starts n daemons in docker:dind containers on one network of
+// the test's Docker, and removes them when the test ends.
+func startNodes(t *testing.T, n int) []testNode {
+	t.Helper()
+	ctx := context.Background()
+	api := testDocker(t)
+	const image = "docker:29-dind"
+	if _, err := api.ImageInspect(ctx, image); err != nil {
+		pull, err := api.ImagePull(ctx, image, client.ImagePullOptions{})
+		require.NoError(t, err)
+		_, _ = io.Copy(io.Discard, pull)
+		_ = pull.Close()
+	}
+	name := fmt.Sprintf("swarm-acc-%d", time.Now().UnixNano())
+	created, err := api.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = api.NetworkRemove(context.Background(), created.ID, client.NetworkRemoveOptions{}) })
+
+	port := network.MustParsePort("2375/tcp")
+	nodes := make([]testNode, n)
+	for i := range nodes {
+		c, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Name:   fmt.Sprintf("%s-%d", name, i+1),
+			Config: &container.Config{Image: image, Env: []string{"DOCKER_TLS_CERTDIR="}, ExposedPorts: network.PortSet{port: {}}},
+			HostConfig: &container.HostConfig{
+				Privileged:   true,
+				PortBindings: network.PortMap{port: {{HostIP: netip.MustParseAddr("127.0.0.1")}}},
+			},
+			NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{name: {}}},
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = api.ContainerRemove(context.Background(), c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+		})
+		_, err = api.ContainerStart(ctx, c.ID, client.ContainerStartOptions{})
+		require.NoError(t, err)
+		inspected, err := api.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		require.NoError(t, err)
+		nodes[i] = testNode{
+			container: c.ID,
+			endpoint:  "tcp://127.0.0.1:" + inspected.Container.NetworkSettings.Ports[port][0].HostPort,
+			address:   inspected.Container.NetworkSettings.Networks[name].IPAddress.String(),
+		}
+	}
+	ready, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for _, node := range nodes {
+		d, err := reach(ready, node.endpoint, nil, true)
+		require.NoError(t, err, "the daemon of a test node")
+		_ = d.api.Close()
+	}
+	return nodes
 }
 
 func TestSwarmProvider_schema(t *testing.T) {

@@ -6,6 +6,23 @@ resource "swarm_cluster" "this" {
       role           = "manager"
       labels         = { zone = "a" }
     }
+    "node-2" = {
+      endpoint       = "tcp://10.0.0.12:2376"
+      advertise_addr = "10.0.0.12"
+      role           = "manager"
+      labels         = { zone = "b" }
+    }
+    "node-3" = {
+      endpoint       = "tcp://10.0.0.13:2376"
+      advertise_addr = "10.0.0.13"
+      role           = "manager"
+      labels         = { zone = "c" }
+    }
+    "node-4" = {
+      endpoint     = "ssh://deploy@10.0.0.14"
+      role         = "worker"
+      availability = "drain"
+    }
   }
 
   tls = {

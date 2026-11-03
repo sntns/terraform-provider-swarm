@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -20,6 +21,10 @@ import (
 
 // statusAbsent is the status of a node that is in no swarm.
 const statusAbsent = "absent"
+
+// pollInterval separates two looks at a cluster that is changing: a node
+// joining, draining or being demoted.
+var pollInterval = 2 * time.Second
 
 // tls is the node's TLS, else the cluster's.
 func (node nodeModel) tls(cluster *tlsModel) *tlsModel {
@@ -37,9 +42,11 @@ func closeAll(daemons map[string]*daemon) {
 
 // reconcile brings the cluster to the plan, from what Docker says: it
 // adopts the cluster the managers are in, else the first manager by name
-// inits one, then sets each node's spec, and records what Docker reports.
-// imported is the cluster's ID, when it is known before the nodes are.
-func reconcile(ctx context.Context, plan *clusterModel, imported string) diag.Diagnostics {
+// inits one. Then the nodes that are in no swarm join it, managers first;
+// promotions and the other changes of spec come before demotions; and the
+// nodes the prior state had that the plan no longer has are removed. prior
+// is nil on create.
+func reconcile(ctx context.Context, plan, prior *clusterModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 	names := slices.Sorted(maps.Keys(plan.Nodes))
 	daemons := map[string]*daemon{}
@@ -62,13 +69,7 @@ func reconcile(ctx context.Context, plan *clusterModel, imported string) diag.Di
 			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Locked node",
 				"The node's swarm is autolocked: unlock it with `docker swarm unlock` first.")
 			return diags
-		case state.LocalNodeState != swarm.LocalNodeStateActive:
-			continue
-		case !state.ControlAvailable:
-			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Worker of another swarm",
-				fmt.Sprintf("The node is a worker of a swarm whose managers are not in the configuration: make it leave that swarm (`docker swarm leave`) first. %s", state.Error))
-			return diags
-		case state.Cluster == nil:
+		case state.LocalNodeState != swarm.LocalNodeStateActive || !state.ControlAvailable || state.Cluster == nil:
 			continue
 		case clusterID != "" && state.Cluster.ID != clusterID:
 			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Managers of two swarms",
@@ -80,9 +81,9 @@ func reconcile(ctx context.Context, plan *clusterModel, imported string) diag.Di
 			manager = name
 		}
 	}
-	if imported != "" && clusterID != "" && clusterID != imported {
+	if prior != nil && prior.ID.ValueString() != "" && clusterID != "" && clusterID != prior.ID.ValueString() {
 		diags.AddAttributeError(path.Root("nodes"), "Another swarm",
-			fmt.Sprintf("The managers are in the swarm %s, not in %s, which the state holds.", clusterID, imported))
+			fmt.Sprintf("The managers are in the swarm %s, not in %s, which the state holds.", clusterID, prior.ID.ValueString()))
 		return diags
 	}
 
@@ -101,32 +102,30 @@ func reconcile(ctx context.Context, plan *clusterModel, imported string) diag.Di
 			return diags
 		}
 		tflog.Info(ctx, "initialised the swarm", map[string]any{"node": manager})
-		result, err := daemons[manager].api.Info(ctx, client.InfoOptions{})
-		if err != nil {
-			diags.AddAttributeError(path.Root("nodes").AtMapKey(manager), "Unreachable node", err.Error())
+		if diags.Append(refresh(ctx, daemons[manager], path.Root("nodes").AtMapKey(manager))...); diags.HasError() {
 			return diags
 		}
-		daemons[manager].info = result.Info
 	}
 
-	api := daemons[manager].api
-	for _, name := range names {
-		id := daemons[name].info.Swarm.NodeID
-		inspected, err := api.NodeInspect(ctx, id, client.NodeInspectOptions{})
-		if err != nil {
-			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Node not found", err.Error())
-			return diags
+	if diags.Append(join(ctx, plan, names, daemons, daemons[manager])...); diags.HasError() {
+		return diags
+	}
+	for _, demotions := range []bool{false, true} {
+		for _, name := range names {
+			if diags.Append(setSpec(ctx, daemons[manager].api, daemons[name].info.Swarm.NodeID, plan.Nodes[name], demotions, path.Root("nodes").AtMapKey(name))...); diags.HasError() {
+				return diags
+			}
 		}
-		spec, changed, d := desiredSpec(ctx, inspected.Node.Spec, plan.Nodes[name])
-		diags.Append(d...)
-		if diags.HasError() {
-			return diags
+		if !demotions {
+			// The demotions come once the promoted nodes are managers, and go through one that stays a manager.
+			if diags.Append(promoted(ctx, plan, names, daemons)...); diags.HasError() {
+				return diags
+			}
+			manager = firstManager(plan.Nodes, names)
 		}
-		if !changed {
-			continue
-		}
-		if _, err := api.NodeUpdate(ctx, id, client.NodeUpdateOptions{Version: inspected.Node.Version, Spec: spec}); err != nil {
-			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Node update failed", err.Error())
+	}
+	if prior != nil {
+		if diags.Append(remove(ctx, plan, prior, daemons, daemons[manager])...); diags.HasError() {
 			return diags
 		}
 	}
@@ -140,6 +139,285 @@ func reconcile(ctx context.Context, plan *clusterModel, imported string) diag.Di
 			"The swarm the managers are in was created with other init settings, which Docker cannot change. Give the swarm's, or none.")
 	}
 	return diags
+}
+
+// refresh reads again what a daemon says of itself.
+func refresh(ctx context.Context, d *daemon, at path.Path) diag.Diagnostics {
+	var diags diag.Diagnostics
+	result, err := d.api.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		diags.AddAttributeError(at, "Unreachable node", err.Error())
+		return diags
+	}
+	d.info = result.Info
+	return diags
+}
+
+// join makes the nodes that are in no swarm join the manager's, managers
+// first, each with its role's token. A worker already in a swarm must be in
+// that one.
+func join(ctx context.Context, plan *clusterModel, names []string, daemons map[string]*daemon, manager *daemon) diag.Diagnostics {
+	var diags diag.Diagnostics
+	inspected, err := manager.api.SwarmInspect(ctx, client.SwarmInspectOptions{})
+	if err != nil {
+		diags.AddError("Swarm inspect failed", err.Error())
+		return diags
+	}
+	listed, err := manager.api.NodeList(ctx, client.NodeListOptions{})
+	if err != nil {
+		diags.AddError("Node list failed", err.Error())
+		return diags
+	}
+	members := map[string]bool{}
+	var addresses []string
+	for _, node := range listed.Items {
+		members[node.ID] = true
+		if node.ManagerStatus != nil {
+			addresses = append(addresses, node.ManagerStatus.Addr)
+		}
+	}
+
+	ordered := slices.Clone(names)
+	slices.SortStableFunc(ordered, func(a, b string) int { return cmp.Compare(rank(plan.Nodes[b].Role), rank(plan.Nodes[a].Role)) })
+	for _, name := range ordered {
+		d, at := daemons[name], path.Root("nodes").AtMapKey(name)
+		if d.info.Swarm.LocalNodeState == swarm.LocalNodeStateActive {
+			if !members[d.info.Swarm.NodeID] {
+				diags.AddAttributeError(at, "Node of another swarm",
+					"The node is in a swarm whose managers are not in the configuration: make it leave that swarm (`docker swarm leave`) first.")
+				return diags
+			}
+			continue
+		}
+		token := inspected.Swarm.JoinTokens.Worker
+		if plan.Nodes[name].Role.ValueString() == string(swarm.NodeRoleManager) {
+			token = inspected.Swarm.JoinTokens.Manager
+		}
+		if d.info.Swarm.LocalNodeState == swarm.LocalNodeStateInactive {
+			_, err := d.api.SwarmJoin(ctx, client.SwarmJoinOptions{
+				ListenAddr:    "0.0.0.0:2377",
+				AdvertiseAddr: plan.Nodes[name].AdvertiseAddr.ValueString(),
+				RemoteAddrs:   addresses,
+				JoinToken:     token,
+			})
+			if err != nil {
+				tflog.Warn(ctx, "the join did not complete yet", map[string]any{"node": name, "error": err.Error()})
+			}
+		}
+		// A join that takes long goes on in the background: the node is pending until it completes.
+		for {
+			if diags.Append(refresh(ctx, d, at)...); diags.HasError() {
+				return diags
+			}
+			state := d.info.Swarm.LocalNodeState
+			if state == swarm.LocalNodeStateActive {
+				break
+			}
+			if state != swarm.LocalNodeStatePending {
+				diags.AddAttributeError(at, "Swarm join failed", fmt.Sprintf("The node is %s after joining: %s", state, d.info.Swarm.Error))
+				return diags
+			}
+			if !pause(ctx) {
+				diags.AddAttributeError(at, "Swarm join failed", "The node was still joining when the timeout ended.")
+				return diags
+			}
+		}
+		tflog.Info(ctx, "the node joined the swarm", map[string]any{"node": name})
+	}
+	return diags
+}
+
+// promoted waits until every node the plan makes a manager is one.
+func promoted(ctx context.Context, plan *clusterModel, names []string, daemons map[string]*daemon) diag.Diagnostics {
+	var diags diag.Diagnostics
+	for _, name := range names {
+		if plan.Nodes[name].Role.ValueString() != string(swarm.NodeRoleManager) {
+			continue
+		}
+		at := path.Root("nodes").AtMapKey(name)
+		for {
+			if diags.Append(refresh(ctx, daemons[name], at)...); diags.HasError() || daemons[name].info.Swarm.ControlAvailable {
+				break
+			}
+			if !pause(ctx) {
+				diags.AddAttributeError(at, "Promotion not finished", "The node was not a manager yet when the timeout ended.")
+				break
+			}
+		}
+		if diags.HasError() {
+			return diags
+		}
+	}
+	return diags
+}
+
+// setSpec sets the node's spec as the plan gives it, in the pass of the
+// demotions or in the pass of every other change.
+func setSpec(ctx context.Context, api *client.Client, id string, node nodeModel, demotions bool, at path.Path) diag.Diagnostics {
+	var diags diag.Diagnostics
+	inspected, err := api.NodeInspect(ctx, id, client.NodeInspectOptions{})
+	if err != nil {
+		diags.AddAttributeError(at, "Node not found", err.Error())
+		return diags
+	}
+	spec, changed, d := desiredSpec(ctx, inspected.Node.Spec, node)
+	diags.Append(d...)
+	demotion := inspected.Node.Spec.Role == swarm.NodeRoleManager && spec.Role == swarm.NodeRoleWorker
+	if diags.HasError() || !changed || demotion != demotions {
+		return diags
+	}
+	if _, err := api.NodeUpdate(ctx, id, client.NodeUpdateOptions{Version: inspected.Node.Version, Spec: spec}); err != nil {
+		diags.AddAttributeError(at, "Node update failed", err.Error())
+	}
+	return diags
+}
+
+// remove takes out of the cluster the nodes the prior state had and the
+// plan no longer has, and the ghosts of nodes that joined again under
+// another ID: each is drained until its tasks run elsewhere, demoted, made
+// to leave when it answers, then removed. Nodes that joined by hand stay.
+func remove(ctx context.Context, plan, prior *clusterModel, daemons map[string]*daemon, manager *daemon) diag.Diagnostics {
+	var diags diag.Diagnostics
+	current := map[string]bool{}
+	for _, d := range daemons {
+		current[d.info.Swarm.NodeID] = true
+	}
+	names := slices.Sorted(maps.Keys(prior.Nodes))
+	slices.SortStableFunc(names, func(a, b string) int { return cmp.Compare(rank(prior.Nodes[a].Role), rank(prior.Nodes[b].Role)) })
+	for _, name := range names {
+		node, at := prior.Nodes[name], path.Root("nodes").AtMapKey(name)
+		id := node.NodeID.ValueString()
+		if id == "" || current[id] {
+			continue
+		}
+		inspected, err := manager.api.NodeInspect(ctx, id, client.NodeInspectOptions{})
+		if err != nil {
+			continue
+		}
+		_, kept := plan.Nodes[name]
+		if !kept && inspected.Node.Status.State == swarm.NodeStateReady {
+			if diags.Append(update(ctx, manager.api, id, func(spec *swarm.NodeSpec) { spec.Availability = swarm.NodeAvailabilityDrain }, at)...); diags.HasError() {
+				return diags
+			}
+			if diags.Append(drained(ctx, manager.api, id, at)...); diags.HasError() {
+				return diags
+			}
+		}
+		if inspected.Node.Spec.Role == swarm.NodeRoleManager {
+			if diags.Append(update(ctx, manager.api, id, func(spec *swarm.NodeSpec) { spec.Role = swarm.NodeRoleWorker }, at)...); diags.HasError() {
+				return diags
+			}
+			if diags.Append(demoted(ctx, manager.api, id, at)...); diags.HasError() {
+				return diags
+			}
+		}
+		if !kept {
+			if d, err := reach(ctx, node.Endpoint.ValueString(), node.tls(prior.TLS), false); err == nil {
+				if d.info.Swarm.LocalNodeState == swarm.LocalNodeStateActive && d.info.Swarm.NodeID == id {
+					if _, err := d.api.SwarmLeave(ctx, client.SwarmLeaveOptions{}); err != nil {
+						tflog.Warn(ctx, "the node did not leave the swarm", map[string]any{"node": name, "error": err.Error()})
+					}
+				}
+				_ = d.api.Close()
+			}
+		}
+		if _, err := manager.api.NodeRemove(ctx, id, client.NodeRemoveOptions{Force: true}); err != nil {
+			diags.AddAttributeError(at, "Node removal failed", err.Error())
+			return diags
+		}
+		tflog.Info(ctx, "removed the node from the swarm", map[string]any{"node": name, "id": id})
+	}
+	return diags
+}
+
+// update changes the spec of a node, at its current version.
+func update(ctx context.Context, api *client.Client, id string, change func(*swarm.NodeSpec), at path.Path) diag.Diagnostics {
+	var diags diag.Diagnostics
+	inspected, err := api.NodeInspect(ctx, id, client.NodeInspectOptions{})
+	if err != nil {
+		diags.AddAttributeError(at, "Node not found", err.Error())
+		return diags
+	}
+	spec := inspected.Node.Spec
+	change(&spec)
+	if _, err := api.NodeUpdate(ctx, id, client.NodeUpdateOptions{Version: inspected.Node.Version, Spec: spec}); err != nil {
+		diags.AddAttributeError(at, "Node update failed", err.Error())
+	}
+	return diags
+}
+
+// drained waits until no task runs on the node.
+func drained(ctx context.Context, api *client.Client, id string, at path.Path) diag.Diagnostics {
+	var diags diag.Diagnostics
+	for {
+		tasks, err := api.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("node", id).Add("desired-state", "running")})
+		if err != nil {
+			diags.AddAttributeError(at, "Task list failed", err.Error())
+			return diags
+		}
+		if len(tasks.Items) == 0 {
+			return diags
+		}
+		if !pause(ctx) {
+			diags.AddAttributeError(at, "Drain not finished", fmt.Sprintf("%d tasks still run on the node when the timeout ended.", len(tasks.Items)))
+			return diags
+		}
+	}
+}
+
+// demoted waits until the node is no longer a manager of the raft.
+func demoted(ctx context.Context, api *client.Client, id string, at path.Path) diag.Diagnostics {
+	var diags diag.Diagnostics
+	for {
+		inspected, err := api.NodeInspect(ctx, id, client.NodeInspectOptions{})
+		if err != nil {
+			diags.AddAttributeError(at, "Node not found", err.Error())
+			return diags
+		}
+		if inspected.Node.ManagerStatus == nil {
+			return diags
+		}
+		if !pause(ctx) {
+			diags.AddAttributeError(at, "Demotion not finished", "The node was still a manager when the timeout ended.")
+			return diags
+		}
+	}
+}
+
+// pause waits between two looks at the cluster, and tells whether the
+// context lets the wait go on.
+func pause(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(pollInterval):
+		return true
+	}
+}
+
+// quorumKept tells whether the managers of the state that stay managers in
+// the plan, and were ready at the last read, are a majority of the state's
+// managers: the raft then keeps its quorum while the others are demoted or
+// removed.
+func quorumKept(state, plan map[string]nodeModel) (kept, total int, ok bool) {
+	for name, node := range state {
+		if node.Role.ValueString() != string(swarm.NodeRoleManager) {
+			continue
+		}
+		total++
+		if planned, in := plan[name]; in && planned.Role.ValueString() == string(swarm.NodeRoleManager) && node.Status.ValueString() == string(swarm.NodeStateReady) {
+			kept++
+		}
+	}
+	return kept, total, total == 0 || kept >= total/2+1
+}
+
+// rank orders workers before managers.
+func rank(role types.String) int {
+	if role.ValueString() == string(swarm.NodeRoleManager) {
+		return 1
+	}
+	return 0
 }
 
 // read records the cluster as Docker reports it. It reports gone when
@@ -290,18 +568,14 @@ func desiredSpec(ctx context.Context, current swarm.NodeSpec, node nodeModel) (s
 	return desired, changed, diags
 }
 
-// leave makes every node leave the swarm, workers first, the managers
-// with force, since the last one takes the swarm down with it.
+// leave makes every node leave the swarm: the managers but one are
+// demoted, so that each leaves as a worker without breaking the quorum,
+// and the last manager leaves with force, which takes the swarm down.
 func leave(ctx context.Context, state *clusterModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	rank := func(name string) int {
-		if state.Nodes[name].Role.ValueString() == string(swarm.NodeRoleManager) {
-			return 1
-		}
-		return 0
-	}
 	names := slices.Sorted(maps.Keys(state.Nodes))
-	slices.SortStableFunc(names, func(a, b string) int { return cmp.Compare(rank(a), rank(b)) })
+	daemons := map[string]*daemon{}
+	defer closeAll(daemons)
 	for _, name := range names {
 		node := state.Nodes[name]
 		d, err := reach(ctx, node.Endpoint.ValueString(), node.tls(state.TLS), true)
@@ -309,12 +583,28 @@ func leave(ctx context.Context, state *clusterModel) diag.Diagnostics {
 			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Unreachable node", err.Error())
 			return diags
 		}
-		manager := node.Role.ValueString() == string(swarm.NodeRoleManager)
-		if d.info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive {
-			_, err = d.api.SwarmLeave(ctx, client.SwarmLeaveOptions{Force: manager})
+		daemons[name] = d
+	}
+	last := firstManager(state.Nodes, names)
+	keeper := daemons[last]
+	for _, name := range names {
+		d, at := daemons[name], path.Root("nodes").AtMapKey(name)
+		if name == last || !d.info.Swarm.ControlAvailable {
+			continue
 		}
-		_ = d.api.Close()
-		if err != nil {
+		if diags.Append(update(ctx, keeper.api, d.info.Swarm.NodeID, func(spec *swarm.NodeSpec) { spec.Role = swarm.NodeRoleWorker }, at)...); diags.HasError() {
+			return diags
+		}
+		if diags.Append(demoted(ctx, keeper.api, d.info.Swarm.NodeID, at)...); diags.HasError() {
+			return diags
+		}
+	}
+	for _, name := range append(slices.DeleteFunc(slices.Clone(names), func(n string) bool { return n == last }), last) {
+		d := daemons[name]
+		if d.info.Swarm.LocalNodeState == swarm.LocalNodeStateInactive {
+			continue
+		}
+		if _, err := d.api.SwarmLeave(ctx, client.SwarmLeaveOptions{Force: name == last}); err != nil {
 			diags.AddAttributeError(path.Root("nodes").AtMapKey(name), "Swarm leave failed", err.Error())
 			return diags
 		}

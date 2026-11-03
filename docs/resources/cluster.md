@@ -3,12 +3,12 @@
 page_title: "swarm_cluster Resource - swarm"
 subcategory: ""
 description: |-
-  A Docker Swarm cluster and its nodes. Each create and update reconciles the cluster from what Docker says: it adopts the cluster its managers are in, or the first manager by name inits one, then sets each node's role, labels and availability. Destroying it keeps the cluster, unless leave_on_destroy is set.
+  A Docker Swarm cluster and its nodes. Each create and update reconciles the cluster from what Docker says: it adopts the cluster its managers are in, or the first manager by name inits one; the nodes in no swarm join it, managers first; promotions come before demotions; and the nodes the configuration no longer has are drained until their tasks run elsewhere, demoted, made to leave, and removed. A change that would keep fewer than a majority of the managers ready is refused at plan time: add the new managers in one apply, remove the old ones in the next. Destroying it keeps the cluster, unless leave_on_destroy is set.
 ---
 
 # swarm_cluster (Resource)
 
-A Docker Swarm cluster and its nodes. Each create and update reconciles the cluster from what Docker says: it adopts the cluster its managers are in, or the first manager by name inits one, then sets each node's role, labels and availability. Destroying it keeps the cluster, unless `leave_on_destroy` is set.
+A Docker Swarm cluster and its nodes. Each create and update reconciles the cluster from what Docker says: it adopts the cluster its managers are in, or the first manager by name inits one; the nodes in no swarm join it, managers first; promotions come before demotions; and the nodes the configuration no longer has are drained until their tasks run elsewhere, demoted, made to leave, and removed. A change that would keep fewer than a majority of the managers ready is refused at plan time: add the new managers in one apply, remove the old ones in the next. Destroying it keeps the cluster, unless `leave_on_destroy` is set.
 
 ## Example Usage
 
@@ -20,6 +20,23 @@ resource "swarm_cluster" "this" {
       advertise_addr = "10.0.0.11"
       role           = "manager"
       labels         = { zone = "a" }
+    }
+    "node-2" = {
+      endpoint       = "tcp://10.0.0.12:2376"
+      advertise_addr = "10.0.0.12"
+      role           = "manager"
+      labels         = { zone = "b" }
+    }
+    "node-3" = {
+      endpoint       = "tcp://10.0.0.13:2376"
+      advertise_addr = "10.0.0.13"
+      role           = "manager"
+      labels         = { zone = "c" }
+    }
+    "node-4" = {
+      endpoint     = "ssh://deploy@10.0.0.14"
+      role         = "worker"
+      availability = "drain"
     }
   }
 
