@@ -1,53 +1,5 @@
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-terraform-provider-swarm
-
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-
-# Build artifacts
-terraform-provider-swarm
-dist/
-bin/
-
-# Terraform files
-*.tfstate
-*.tfstate.*
-*.tfvars
-*.tfvars.json
+/terraform-provider-swarm
+/bin/
 .terraform/
-.terraform.lock.hcl
-
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Testing
-.test/
-examples/.terraform/
-examples/*.tfstate
-examples/*.tfvars
-examples/.terraform.lock.hcl
-
-# Auto-generated documentation (keep manually written docs)
-# docs/
+*.tfstate*
+dist/
