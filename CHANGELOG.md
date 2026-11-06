@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/sntns/terraform-provider-swarm/compare/v1.0.0...v1.0.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* retry a node update that Swarm rejects as out of sequence ([1283e29](https://github.com/sntns/terraform-provider-swarm/commit/1283e29adb90201713017674587c95c7c3a591a0))
+
 ## [1.0.0](https://github.com/sntns/terraform-provider-swarm/compare/v0.2.0...v1.0.0) (2026-11-03)
 
 
