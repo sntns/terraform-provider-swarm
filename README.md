@@ -41,7 +41,6 @@ On the [Terraform Registry](https://registry.terraform.io/providers/sntns/swarm/
 - [`swarm_cluster`](docs/resources/cluster.md): every setting of a cluster and its nodes.
 - [The `swarm_cluster` data source](docs/data-sources/cluster.md): a cluster's tokens and nodes, read from a manager.
 - [Upgrading from v0.2](docs/guides/upgrading-from-v0.2.md): from `swarm_init` and `swarm_join` to `swarm_cluster`.
-- [The design](docs/design/swarm-cluster.md): how a cluster is reconciled, and why.
 
 ## Upgrading from v0.2
 
