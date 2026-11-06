@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -25,6 +26,10 @@ const statusAbsent = "absent"
 // pollInterval separates two looks at a cluster that is changing: a node
 // joining, draining or being demoted.
 var pollInterval = 2 * time.Second
+
+// updateAttempts bounds the tries of a node update that Swarm rejects
+// because the node changed since it was read.
+const updateAttempts = 5
 
 // tls is the node's TLS, else the cluster's.
 func (node nodeModel) tls(cluster *tlsModel) *tlsModel {
@@ -266,9 +271,7 @@ func setSpec(ctx context.Context, api *client.Client, id string, node nodeModel,
 	if diags.HasError() || !changed || demotion != demotions {
 		return diags
 	}
-	if _, err := api.NodeUpdate(ctx, id, client.NodeUpdateOptions{Version: inspected.Node.Version, Spec: spec}); err != nil {
-		diags.AddAttributeError(at, "Node update failed", err.Error())
-	}
+	diags.Append(update(ctx, api, id, func(current *swarm.NodeSpec) { *current, _, _ = desiredSpec(ctx, *current, node) }, at)...)
 	return diags
 }
 
@@ -330,20 +333,29 @@ func remove(ctx context.Context, plan, prior *clusterModel, daemons map[string]*
 	return diags
 }
 
-// update changes the spec of a node, at its current version.
+// update changes the spec of a node, at its current version. Swarm
+// rejects the update when it changed the node since it was read, as its
+// status right after a join or a promotion: the node is read again and the
+// update tried again.
 func update(ctx context.Context, api *client.Client, id string, change func(*swarm.NodeSpec), at path.Path) diag.Diagnostics {
 	var diags diag.Diagnostics
-	inspected, err := api.NodeInspect(ctx, id, client.NodeInspectOptions{})
-	if err != nil {
-		diags.AddAttributeError(at, "Node not found", err.Error())
-		return diags
+	for attempt := 1; ; attempt++ {
+		inspected, err := api.NodeInspect(ctx, id, client.NodeInspectOptions{})
+		if err != nil {
+			diags.AddAttributeError(at, "Node not found", err.Error())
+			return diags
+		}
+		spec := inspected.Node.Spec
+		change(&spec)
+		_, err = api.NodeUpdate(ctx, id, client.NodeUpdateOptions{Version: inspected.Node.Version, Spec: spec})
+		if err == nil {
+			return diags
+		}
+		if !strings.Contains(err.Error(), "update out of sequence") || attempt == updateAttempts || !pause(ctx) {
+			diags.AddAttributeError(at, "Node update failed", err.Error())
+			return diags
+		}
 	}
-	spec := inspected.Node.Spec
-	change(&spec)
-	if _, err := api.NodeUpdate(ctx, id, client.NodeUpdateOptions{Version: inspected.Node.Version, Spec: spec}); err != nil {
-		diags.AddAttributeError(at, "Node update failed", err.Error())
-	}
-	return diags
 }
 
 // drained waits until no task runs on the node.

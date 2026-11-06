@@ -2,14 +2,19 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -36,6 +41,42 @@ func TestQuorumKept(t *testing.T) {
 	assert.False(t, ok, "a manager that is down does not keep the quorum")
 	_, _, ok = quorumKept(map[string]nodeModel{"a": node("manager", "ready")}, map[string]nodeModel{"a": node("manager", ""), "b": node("manager", "")})
 	assert.True(t, ok, "adding managers keeps the quorum")
+}
+
+// A daemon whose node changes at each update rejects the first ones as out
+// of sequence: the update is tried again at the version read again, a few
+// times.
+func TestUpdate_outOfSequence(t *testing.T) {
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = 2 * time.Second })
+	fake := func(rejections int) (*client.Client, *[]string) {
+		var versions []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/nodes/n1"):
+				_ = json.NewEncoder(w).Encode(swarm.Node{ID: "n1", Meta: swarm.Meta{Version: swarm.Version{Index: uint64(len(versions) + 1)}}})
+			case strings.HasSuffix(r.URL.Path, "/nodes/n1/update"):
+				versions = append(versions, r.URL.Query().Get("version"))
+				if len(versions) <= rejections {
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"message": "rpc error: code = Unknown desc = update out of sequence"}`))
+				}
+			}
+		}))
+		t.Cleanup(server.Close)
+		api, err := client.New(client.WithHost("tcp://" + server.Listener.Addr().String()))
+		require.NoError(t, err)
+		return api, &versions
+	}
+	drain := func(spec *swarm.NodeSpec) { spec.Availability = swarm.NodeAvailabilityDrain }
+
+	api, versions := fake(2)
+	assert.False(t, update(context.Background(), api, "n1", drain, path.Root("nodes")).HasError())
+	assert.Equal(t, []string{"1", "2", "3"}, *versions)
+	api, versions = fake(updateAttempts)
+	assert.True(t, update(context.Background(), api, "n1", drain, path.Root("nodes")).HasError())
+	assert.Len(t, *versions, updateAttempts)
 }
 
 // Four daemons in docker:dind: three managers and a worker join, two swap
