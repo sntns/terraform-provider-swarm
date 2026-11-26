@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/sntns/terraform-provider-swarm/compare/v1.0.1...v1.0.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* apply init's subnet_size when default_addr_pool is not given ([18dd5e6](https://github.com/sntns/terraform-provider-swarm/commit/18dd5e6e0afb16c01efd2f370159febfb825bfa5))
+* **deps:** bump go.opentelemetry.io/otel to v1.47.0 for GO-2026-6974 ([2a657aa](https://github.com/sntns/terraform-provider-swarm/commit/2a657aaea10ec19ff2a1145f8014278a59662f47))
+
 ## [1.0.1](https://github.com/sntns/terraform-provider-swarm/compare/v1.0.0...v1.0.1) (2026-11-06)
 
 
