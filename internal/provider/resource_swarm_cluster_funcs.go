@@ -102,6 +102,10 @@ func reconcile(ctx context.Context, plan, prior *clusterModel) diag.Diagnostics 
 		node := plan.Nodes[manager]
 		settings.ListenAddr = "0.0.0.0:2377"
 		settings.AdvertiseAddr = node.AdvertiseAddr.ValueString()
+		if settings.SubnetSize != 0 && len(settings.DefaultAddrPool) == 0 {
+			// Docker applies a subnet size only to a pool it is given: its own default one, when none is.
+			settings.DefaultAddrPool = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+		}
 		if _, err := daemons[manager].api.SwarmInit(ctx, settings); err != nil {
 			diags.AddAttributeError(path.Root("nodes").AtMapKey(manager), "Swarm init failed", err.Error())
 			return diags

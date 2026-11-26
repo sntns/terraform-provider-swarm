@@ -199,7 +199,7 @@ func (r *swarmClusterResource) Schema(ctx context.Context, _ resource.SchemaRequ
 						PlanModifiers:       []planmodifier.List{listplanmodifier.UseStateForUnknown()},
 					},
 					"subnet_size": schema.Int64Attribute{
-						MarkdownDescription: "The prefix length of each overlay network's subnet. Default: Docker's, 24.",
+						MarkdownDescription: "The prefix length of each overlay network's subnet, cut out of `default_addr_pool`. Default: Docker's, 24.",
 						Optional:            true,
 						Computed:            true,
 						PlanModifiers:       []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
