@@ -111,7 +111,7 @@ Optional:
 
 - `data_path_port` (Number) The UDP port of the overlay networks' traffic. Default: Docker's, 4789.
 - `default_addr_pool` (List of String) The pools of the overlay networks' subnets, in CIDR. Default: Docker's, `10.0.0.0/8`.
-- `subnet_size` (Number) The prefix length of each overlay network's subnet. Default: Docker's, 24.
+- `subnet_size` (Number) The prefix length of each overlay network's subnet, cut out of `default_addr_pool`. Default: Docker's, 24.
 
 
 <a id="nestedatt--timeouts"></a>

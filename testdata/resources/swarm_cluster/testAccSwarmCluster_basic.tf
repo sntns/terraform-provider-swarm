@@ -10,6 +10,7 @@ resource "swarm_cluster" "test" {
   }
   init = {
     data_path_port = %[4]d
+    subnet_size    = 20
   }
   leave_on_destroy = true
 }
